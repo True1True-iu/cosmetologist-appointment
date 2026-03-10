@@ -846,6 +846,11 @@ export const MyAppointmentsPage = () => {
     }
   };
 
+  const deleteAppointment = (id) => {
+    setAppointments((prev) => prev.filter((a) => a.id !== id));
+    pushNotification("Прошедшая запись удалена из списка", "info");
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
@@ -929,19 +934,31 @@ export const MyAppointmentsPage = () => {
                 >
                   {a.status}
                 </Badge>
-                <div className="flex gap-2">
-                  {a.status !== "отменена" && (
-                    <button
-                      onClick={() => updateStatus(a.id, "отменена")}
-                      className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition"
-                    >
-                      Отменить
+                {tab === "upcoming" && (
+                  <div className="flex gap-2">
+                    {a.status !== "отменена" && (
+                      <button
+                        onClick={() => updateStatus(a.id, "отменена")}
+                        className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition"
+                      >
+                        Отменить
+                      </button>
+                    )}
+                    <button className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-slate-900 transition">
+                      Перенести
                     </button>
-                  )}
-                  <button className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-slate-900 transition">
-                    Перенести
-                  </button>
-                </div>
+                  </div>
+                )}
+                {tab === "past" && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => deleteAppointment(a.id)}
+                      className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-rose-600/20 hover:border-rose-500/60 hover:text-rose-100 transition"
+                    >
+                      Удалить запись
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
