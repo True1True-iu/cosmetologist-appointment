@@ -343,6 +343,7 @@ export const BookingPage = () => {
     consentMarketing: false
   });
   const [createdAppointment, setCreatedAppointment] = useState(null);
+  const [errors, setErrors] = useState({});
 
   const { pushNotification } = useNotifications();
   const navigate = useNavigate();
@@ -362,18 +363,44 @@ export const BookingPage = () => {
   );
 
   const handleNext = () => {
-    if (step === 1 && !selectedService) {
-      pushNotification("Выберите услугу, чтобы продолжить", "error");
-      return;
+    // Валидация по шагам: формируем объект ошибок и блокируем переход, если он не пустой
+    if (step === 1) {
+      const stepErrors = {};
+      if (!selectedService) {
+        stepErrors.service = "Выберите услугу, чтобы продолжить";
+      }
+      setErrors(stepErrors);
+      if (Object.keys(stepErrors).length > 0) return;
     }
-    if (step === 2 && (!selectedDate || !selectedTime)) {
-      pushNotification("Выберите дату и время записи", "error");
-      return;
+    if (step === 2) {
+      const stepErrors = {};
+      if (!selectedDate) {
+        stepErrors.date = "Выберите дату записи";
+      }
+      if (!selectedTime) {
+        stepErrors.time = "Выберите время записи";
+      }
+      setErrors(stepErrors);
+      if (Object.keys(stepErrors).length > 0) return;
     }
-    if (step === 3 && (!clientData.name || !clientData.phone || !clientData.consentData)) {
-      pushNotification("Заполните обязательные поля и согласие на обработку данных", "error");
-      return;
+    if (step === 3) {
+      const stepErrors = {};
+      if (!clientData.name.trim()) {
+        stepErrors.name = "Укажите ваше имя";
+      }
+      const phoneDigits = clientData.phone.replace(/\D/g, "");
+      if (!clientData.phone.trim()) {
+        stepErrors.phone = "Укажите номер телефона";
+      } else if (phoneDigits.length < 10 || phoneDigits.length > 12) {
+        stepErrors.phone = "Проверьте номер телефона (обычно 10–11 цифр без кода страны или с +7)";
+      }
+      if (!clientData.consentData) {
+        stepErrors.consentData = "Необходимо согласие на обработку данных";
+      }
+      setErrors(stepErrors);
+      if (Object.keys(stepErrors).length > 0) return;
     }
+    setErrors({});
     setStep((prev) => Math.min(prev + 1, 4));
   };
 
@@ -382,7 +409,11 @@ export const BookingPage = () => {
   };
 
   const handleConfirm = () => {
-    if (!selectedService || !selectedDate || !selectedTime) return;
+    // Дополнительная проверка перед финальным подтверждением
+    if (!selectedService || !selectedDate || !selectedTime) {
+      pushNotification("Заполнение шагов записи не завершено", "error");
+      return;
+    }
     const newAppointment = {
       id: `local-${Date.now()}`,
       serviceId: selectedService.id,
@@ -418,6 +449,7 @@ export const BookingPage = () => {
             <StepSelectService
               selectedServiceId={selectedServiceId}
               setSelectedServiceId={setSelectedServiceId}
+              error={errors.service}
             />
           )}
           {step === 2 && (
@@ -427,10 +459,19 @@ export const BookingPage = () => {
               selectedTime={selectedTime}
               setSelectedTime={setSelectedTime}
               slots={slots}
+              errors={{ date: errors.date, time: errors.time }}
             />
           )}
           {step === 3 && (
-            <StepClientData clientData={clientData} setClientData={setClientData} />
+            <StepClientData
+              clientData={clientData}
+              setClientData={setClientData}
+              errors={{
+                name: errors.name,
+                phone: errors.phone,
+                consentData: errors.consentData
+              }}
+            />
           )}
           {step === 4 && (
             <StepConfirmation
@@ -532,7 +573,7 @@ const BookingStepsIndicator = ({ step }) => {
   );
 };
 
-const StepSelectService = ({ selectedServiceId, setSelectedServiceId }) => {
+const StepSelectService = ({ selectedServiceId, setSelectedServiceId, error }) => {
   return (
     <div className="space-y-3">
       <h3 className="text-sm font-semibold">Шаг 1. Выбор услуги</h3>
@@ -543,7 +584,11 @@ const StepSelectService = ({ selectedServiceId, setSelectedServiceId }) => {
       <select
         value={selectedServiceId}
         onChange={(e) => setSelectedServiceId(e.target.value)}
-        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs outline-none focus:border-emerald-400"
+        className={`w-full bg-slate-900 rounded-xl px-3 py-2 text-xs outline-none ${
+          error
+            ? "border border-rose-500 focus:border-rose-400"
+            : "border border-slate-700 focus:border-emerald-400"
+        }`}
       >
         {SERVICES.map((s) => (
           <option key={s.id} value={s.id}>
@@ -562,6 +607,7 @@ const StepSelectService = ({ selectedServiceId, setSelectedServiceId }) => {
           </div>
         </div>
       )}
+      {error && <p className="text-[11px] text-rose-400 mt-1">{error}</p>}
     </div>
   );
 };
@@ -571,7 +617,8 @@ const StepSelectDateTime = ({
   setSelectedDate,
   selectedTime,
   setSelectedTime,
-  slots
+  slots,
+  errors
 }) => {
   const today = new Date();
   const nextSevenDays = Array.from({ length: 7 }).map((_, i) => {
@@ -630,17 +677,16 @@ const StepSelectDateTime = ({
           );
         })}
       </div>
-
-      {!selectedDate && (
-        <p className="text-[11px] text-amber-300/90">
-          Сначала выберите дату, затем время.
+      {(errors?.date || errors?.time) && (
+        <p className="text-[11px] text-rose-400">
+          {errors.date || errors.time}
         </p>
       )}
     </div>
   );
 };
 
-const StepClientData = ({ clientData, setClientData }) => {
+const StepClientData = ({ clientData, setClientData, errors }) => {
   const handleChange = (field, value) => {
     setClientData((prev) => ({ ...prev, [field]: value }));
   };
@@ -657,8 +703,15 @@ const StepClientData = ({ clientData, setClientData }) => {
           <input
             value={clientData.name}
             onChange={(e) => handleChange("name", e.target.value)}
-            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-emerald-400"
+            className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none ${
+              errors?.name
+                ? "border border-rose-500 focus:border-rose-400"
+                : "border border-slate-700 focus:border-emerald-400"
+            }`}
           />
+          {errors?.name && (
+            <p className="text-[11px] text-rose-400">{errors.name}</p>
+          )}
         </div>
         <div className="space-y-1.5">
           <label className="text-slate-300">Телефон *</label>
@@ -666,8 +719,15 @@ const StepClientData = ({ clientData, setClientData }) => {
             value={clientData.phone}
             onChange={(e) => handleChange("phone", e.target.value)}
             placeholder="+7 ..."
-            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-emerald-400"
+            className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none ${
+              errors?.phone
+                ? "border border-rose-500 focus:border-rose-400"
+                : "border border-slate-700 focus:border-emerald-400"
+            }`}
           />
+          {errors?.phone && (
+            <p className="text-[11px] text-rose-400">{errors.phone}</p>
+          )}
         </div>
         <div className="space-y-1.5">
           <label className="text-slate-300">E-mail</label>
@@ -701,6 +761,9 @@ const StepClientData = ({ clientData, setClientData }) => {
             политикой конфиденциальности.
           </span>
         </label>
+        {errors?.consentData && (
+          <p className="text-[11px] text-rose-400">{errors.consentData}</p>
+        )}
         <label className="flex items-start gap-2 text-slate-400">
           <input
             type="checkbox"
@@ -972,15 +1035,29 @@ export const MyAppointmentsPage = () => {
 
 export const LoginPage = () => {
   const [role, setRole] = useState("client");
+  const [adminCredentials, setAdminCredentials] = useState({
+    login: "",
+    password: ""
+  });
+  const [errors, setErrors] = useState({});
   const navigate = useNavigate();
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (role === "client") {
-      navigate("/my-appointments");
-    } else {
-      navigate("/admin");
+    if (role === "admin") {
+      const nextErrors = {};
+      if (!adminCredentials.login.trim()) {
+        nextErrors.login = "Введите логин";
+      }
+      if (!adminCredentials.password.trim()) {
+        nextErrors.password = "Введите пароль";
+      }
+      setErrors(nextErrors);
+      if (Object.keys(nextErrors).length > 0) {
+        return;
+      }
     }
+    navigate(role === "client" ? "/my-appointments" : "/admin");
   };
 
   return (
@@ -996,7 +1073,10 @@ export const LoginPage = () => {
       <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-4 text-xs">
         <div className="flex gap-2">
           <button
-            onClick={() => setRole("client")}
+            onClick={() => {
+              setRole("client");
+              setErrors({});
+            }}
             className={`flex-1 px-3 py-2 rounded-full border ${
               role === "client"
                 ? "border-emerald-400 bg-emerald-500/15 text-emerald-100"
@@ -1006,7 +1086,10 @@ export const LoginPage = () => {
             Я клиент
           </button>
           <button
-            onClick={() => setRole("admin")}
+            onClick={() => {
+              setRole("admin");
+              setErrors({});
+            }}
             className={`flex-1 px-3 py-2 rounded-full border ${
               role === "admin"
                 ? "border-fuchsia-400 bg-fuchsia-500/15 text-fuchsia-100"
@@ -1023,17 +1106,39 @@ export const LoginPage = () => {
               <div className="space-y-1.5">
                 <label className="text-slate-300">Логин</label>
                 <input
+                  value={adminCredentials.login}
+                  onChange={(e) =>
+                    setAdminCredentials((prev) => ({ ...prev, login: e.target.value }))
+                  }
                   placeholder="demo"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-fuchsia-400 text-xs"
+                  className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
+                    errors.login
+                      ? "border border-rose-500 focus:border-rose-400"
+                      : "border border-slate-700 focus:border-fuchsia-400"
+                  }`}
                 />
+                {errors.login && (
+                  <p className="text-[11px] text-rose-400">{errors.login}</p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <label className="text-slate-300">Пароль</label>
                 <input
+                  value={adminCredentials.password}
+                  onChange={(e) =>
+                    setAdminCredentials((prev) => ({ ...prev, password: e.target.value }))
+                  }
                   placeholder="demo"
                   type="password"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-fuchsia-400 text-xs"
+                  className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
+                    errors.password
+                      ? "border border-rose-500 focus:border-rose-400"
+                      : "border border-slate-700 focus:border-fuchsia-400"
+                  }`}
                 />
+                {errors.password && (
+                  <p className="text-[11px] text-rose-400">{errors.password}</p>
+                )}
               </div>
               <p className="text-[11px] text-slate-400">
                 Для V1 это заглушка: при нажатии кнопки вы просто попадаете в панель
@@ -1190,6 +1295,23 @@ export const AdminSchedulePage = () => {
   const { pushNotification } = useNotifications();
 
   const handleSave = () => {
+    // Простая валидация временных интервалов
+    const allFilled = workStart && workEnd && breakStart && breakEnd;
+    if (!allFilled) {
+      pushNotification("Заполните все поля рабочего времени и перерыва", "error");
+      return;
+    }
+    if (workStart >= workEnd) {
+      pushNotification("Время начала работы должно быть раньше времени окончания", "error");
+      return;
+    }
+    if (!(breakStart >= workStart && breakEnd <= workEnd && breakStart < breakEnd)) {
+      pushNotification(
+        "Перерыв должен находиться внутри рабочего времени и иметь корректный интервал",
+        "error"
+      );
+      return;
+    }
     pushNotification("Расписание сохранено (пока только на фронтенде).", "info");
   };
 
