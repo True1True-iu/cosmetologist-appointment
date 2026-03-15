@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useNotifications, useAuth } from "./App.jsx";
 import { supabase } from "./supabaseClient.js";
@@ -1408,57 +1408,69 @@ export const AdminDashboardPage = () => {
   const [todayAppointments, setTodayAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const { pushNotification } = useNotifications();
+
+  const fetchToday = useCallback(async () => {
+    setLoading(true);
+    const today = new Date().toISOString().slice(0, 10);
+    const { data, error: err } = await supabase
+      .from("appointments")
+      .select(
+        `
+        id,
+        date,
+        start_time,
+        end_time,
+        status,
+        client_name,
+        client_phone,
+        service:services ( name )
+      `
+      )
+      .eq("date", today)
+      .order("start_time", { ascending: true });
+
+    if (err) {
+      setError(err.message);
+      setTodayAppointments([]);
+    } else {
+      const normalized =
+        (data || []).map((a) => ({
+          id: a.id,
+          date: a.date,
+          startTime: a.start_time,
+          endTime: a.end_time,
+          status: a.status,
+          statusLabel: mapStatusLabel(a.status),
+          serviceName: a.service?.name || "Услуга",
+          clientName: a.client_name,
+          clientPhone: a.client_phone
+        })) ?? [];
+      setTodayAppointments(normalized);
+      setError(null);
+    }
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    let isMounted = true;
-    const fetchToday = async () => {
-      setLoading(true);
-      const today = new Date().toISOString().slice(0, 10);
-      const { data, error: err } = await supabase
-        .from("appointments")
-        .select(
-          `
-          id,
-          date,
-          start_time,
-          end_time,
-          status,
-          client_name,
-          client_phone,
-          service:services ( name )
-        `
-        )
-        .eq("date", today)
-        .order("start_time", { ascending: true });
-
-      if (!isMounted) return;
-
-      if (err) {
-        setError(err.message);
-        setTodayAppointments([]);
-      } else {
-        const normalized =
-          (data || []).map((a) => ({
-            id: a.id,
-            date: a.date,
-            startTime: a.start_time,
-            endTime: a.end_time,
-            status: a.status,
-            statusLabel: mapStatusLabel(a.status),
-            serviceName: a.service?.name || "Услуга",
-            clientName: a.client_name,
-            clientPhone: a.client_phone
-          })) ?? [];
-        setTodayAppointments(normalized);
-        setError(null);
-      }
-      setLoading(false);
-    };
     fetchToday();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  }, [fetchToday]);
+
+  const updateStatus = async (id, newStatus) => {
+    const { error: err } = await supabase
+      .from("appointments")
+      .update({ status: newStatus })
+      .eq("id", id);
+    if (err) {
+      pushNotification("Не удалось обновить запись: " + err.message, "error");
+      return;
+    }
+    setTodayAppointments((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, status: newStatus, statusLabel: mapStatusLabel(newStatus) } : a))
+    );
+    if (newStatus === "confirmed") pushNotification("Запись подтверждена", "info");
+    if (newStatus === "cancelled") pushNotification("Запись отменена", "info");
+  };
 
   return (
     <AdminShell
@@ -1534,10 +1546,26 @@ export const AdminDashboardPage = () => {
                       {a.clientName} • {a.clientPhone}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <Badge tone={mapStatusTone(a.status)}>{a.statusLabel}</Badge>
-                    <button className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition">
-                      Отменить
+                    {a.status === "pending" && (
+                      <button
+                        onClick={() => updateStatus(a.id, "confirmed")}
+                        className="px-3 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/50 text-emerald-200 hover:bg-emerald-500/30 transition text-[11px]"
+                      >
+                        Подтвердить
+                      </button>
+                    )}
+                    {a.status !== "cancelled" && (
+                      <button
+                        onClick={() => updateStatus(a.id, "cancelled")}
+                        className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition text-[11px]"
+                      >
+                        Отменить
+                      </button>
+                    )}
+                    <button className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-200 hover:bg-slate-900 transition text-[11px]">
+                      Перенести
                     </button>
                   </div>
                 </div>
@@ -1662,64 +1690,129 @@ export const AdminSchedulePage = () => {
   );
 };
 
+const todayDate = () => new Date().toISOString().slice(0, 10);
+
 export const AdminAppointmentsPage = () => {
+  const [tab, setTab] = useState("upcoming");
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const { pushNotification } = useNotifications();
 
-  useEffect(() => {
-    let isMounted = true;
-    const fetchAll = async () => {
-      setLoading(true);
-      const { data, error: err } = await supabase
-        .from("appointments")
-        .select(
-          `
-          id,
-          date,
-          start_time,
-          end_time,
-          status,
-          client_name,
-          client_phone,
-          comment,
-          service:services ( name )
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    const { data, error: err } = await supabase
+      .from("appointments")
+      .select(
         `
-        )
-        .order("date", { ascending: true })
-        .order("start_time", { ascending: true });
+        id,
+        date,
+        start_time,
+        end_time,
+        status,
+        client_name,
+        client_phone,
+        comment,
+        service:services ( name )
+      `
+      )
+      .order("date", { ascending: true })
+      .order("start_time", { ascending: true });
 
-      if (!isMounted) return;
-
-      if (err) {
-        setError(err.message);
-        setAppointments([]);
-      } else {
-        const normalized =
-          (data || []).map((a) => ({
-            id: a.id,
-            date: a.date,
-            startTime: a.start_time,
-            status: a.status,
-            statusLabel: mapStatusLabel(a.status),
-            serviceName: a.service?.name || "Услуга",
-            clientName: a.client_name,
-            clientPhone: a.client_phone
-          })) ?? [];
-        setAppointments(normalized);
-        setError(null);
-      }
-      setLoading(false);
-    };
-    fetchAll();
-    return () => {
-      isMounted = false;
-    };
+    if (err) {
+      setError(err.message);
+      setAppointments([]);
+    } else {
+      const normalized =
+        (data || []).map((a) => ({
+          id: a.id,
+          date: a.date,
+          startTime: a.start_time,
+          status: a.status,
+          statusLabel: mapStatusLabel(a.status),
+          serviceName: a.service?.name || "Услуга",
+          clientName: a.client_name,
+          clientPhone: a.client_phone
+        })) ?? [];
+      setAppointments(normalized);
+      setError(null);
+    }
+    setLoading(false);
   }, []);
 
-  const filtered = appointments.filter((a) => {
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  const updateStatus = async (id, newStatus) => {
+    const { error: err } = await supabase
+      .from("appointments")
+      .update({ status: newStatus })
+      .eq("id", id);
+    if (err) {
+      pushNotification("Не удалось обновить запись: " + err.message, "error");
+      return;
+    }
+    setAppointments((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, status: newStatus, statusLabel: mapStatusLabel(newStatus) } : a))
+    );
+    if (newStatus === "confirmed") pushNotification("Запись подтверждена", "info");
+    if (newStatus === "cancelled") pushNotification("Запись отменена", "info");
+  };
+
+  const [rescheduleAppointment, setRescheduleAppointment] = useState(null);
+  const [rescheduleDate, setRescheduleDate] = useState("");
+  const [rescheduleTime, setRescheduleTime] = useState("");
+  const [rescheduleSaving, setRescheduleSaving] = useState(false);
+  const RESCHEDULE_SLOTS = ["10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"];
+
+  const openReschedule = (a) => {
+    setRescheduleAppointment(a);
+    setRescheduleDate(a.date);
+    setRescheduleTime(a.startTime);
+  };
+
+  const saveReschedule = async () => {
+    if (!rescheduleAppointment || !rescheduleDate || !rescheduleTime) {
+      pushNotification("Выберите дату и время", "error");
+      return;
+    }
+    setRescheduleSaving(true);
+    const { error: err } = await supabase
+      .from("appointments")
+      .update({
+        date: rescheduleDate,
+        start_time: rescheduleTime,
+        end_time: rescheduleTime
+      })
+      .eq("id", rescheduleAppointment.id);
+    setRescheduleSaving(false);
+    if (err) {
+      pushNotification("Не удалось перенести запись: " + err.message, "error");
+      return;
+    }
+    pushNotification("Запись перенесена на " + rescheduleDate + " в " + rescheduleTime, "info");
+    setRescheduleAppointment(null);
+    fetchAll();
+  };
+
+  const now = todayDate();
+  const byTab = useMemo(() => {
+    const upcoming = [];
+    const past = [];
+    const cancelled = [];
+    for (const a of appointments) {
+      if (a.status === "cancelled") cancelled.push(a);
+      else if (a.date >= now) upcoming.push(a);
+      else past.push(a);
+    }
+    return { upcoming, past, cancelled };
+  }, [appointments, now]);
+
+  const list = tab === "upcoming" ? byTab.upcoming : tab === "past" ? byTab.past : byTab.cancelled;
+  const filtered = list.filter((a) => {
     const byStatus = statusFilter === "all" || a.status === statusFilter;
     const bySearch =
       !search ||
@@ -1728,75 +1821,202 @@ export const AdminAppointmentsPage = () => {
     return byStatus && bySearch;
   });
 
+  const isPastTab = tab === "past";
+
   return (
     <AdminShell
       title="Все записи"
-      description="Полный список записей клиентов с фильтрами и поиском."
+      description="Полный список записей клиентов. Вкладки: будущие, прошедшие, отменённые."
     >
       <div className="space-y-3 text-xs">
-        <div className="flex flex-wrap gap-2 items-center">
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-emerald-400"
-          >
-            <option value="all">Все статусы</option>
-            <option value="подтверждена">Подтверждённые</option>
-            <option value="ожидает подтверждения">Ожидают подтверждения</option>
-            <option value="отменена">Отменённые</option>
-          </select>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск по имени клиента или услуге"
-            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-emerald-400 flex-1 min-w-[160px]"
-          />
+        <div className="flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="inline-flex rounded-full border border-slate-800 bg-slate-950/80 p-1 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setTab("upcoming")}
+                className={`px-3 py-1.5 rounded-full ${tab === "upcoming" ? "bg-emerald-500 text-slate-950" : "text-slate-300"}`}
+              >
+                Будущие
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("past")}
+                className={`px-3 py-1.5 rounded-full ${tab === "past" ? "bg-emerald-500 text-slate-950" : "text-slate-300"}`}
+              >
+                Прошедшие
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("cancelled")}
+                className={`px-3 py-1.5 rounded-full ${tab === "cancelled" ? "bg-emerald-500 text-slate-950" : "text-slate-300"}`}
+              >
+                Отменённые
+              </button>
+            </div>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-emerald-400"
+            >
+              <option value="all">Все статусы</option>
+              <option value="confirmed">Подтверждённые</option>
+              <option value="pending">Ожидают подтверждения</option>
+              <option value="cancelled">Отменённые</option>
+            </select>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Поиск по имени или услуге"
+              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-emerald-400 flex-1 min-w-[140px]"
+            />
+          </div>
+          {!isPastTab && (
+            <Link
+              to="/booking"
+              className="px-3 py-2 rounded-full bg-emerald-500 text-slate-950 font-semibold hover:bg-emerald-400 transition whitespace-nowrap"
+            >
+              Добавить запись
+            </Link>
+          )}
         </div>
 
-        {loading && (
-          <div className="text-slate-400">Загрузка записей...</div>
-        )}
+        {loading && <div className="text-slate-400">Загрузка записей...</div>}
         {error && !loading && (
           <div className="text-rose-400">Не удалось загрузить записи: {error}</div>
         )}
 
         {!loading && !error && (
           <div className="rounded-2xl border border-slate-800 bg-slate-950/80 overflow-hidden">
-          <table className="w-full text-[11px]">
-            <thead className="bg-slate-900/80 text-slate-400">
-              <tr>
-                <th className="text-left px-3 py-2 font-normal">Дата</th>
-                <th className="text-left px-3 py-2 font-normal">Время</th>
-                <th className="text-left px-3 py-2 font-normal">Клиент</th>
-                <th className="text-left px-3 py-2 font-normal">Услуга</th>
-                <th className="text-left px-3 py-2 font-normal">Статус</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((a) => (
-                <tr key={a.id} className="border-t border-slate-800/80">
-                  <td className="px-3 py-2">{a.date}</td>
-                  <td className="px-3 py-2">{a.startTime}</td>
-                  <td className="px-3 py-2">{a.clientName}</td>
-                  <td className="px-3 py-2">{a.serviceName}</td>
-                  <td className="px-3 py-2">
-                    <Badge tone={mapStatusTone(a.status)}>{a.statusLabel}</Badge>
-                  </td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
+            <table className="w-full text-[11px]">
+              <thead className="bg-slate-900/80 text-slate-400">
                 <tr>
-                  <td
-                    colSpan={5}
-                    className="px-3 py-4 text-center text-slate-400 border-t border-slate-800/80"
-                  >
-                    Записей по выбранным фильтрам не найдено.
-                  </td>
+                  <th className="text-left px-3 py-2 font-normal">Дата</th>
+                  <th className="text-left px-3 py-2 font-normal">Время</th>
+                  <th className="text-left px-3 py-2 font-normal">Клиент</th>
+                  <th className="text-left px-3 py-2 font-normal">Услуга</th>
+                  <th className="text-left px-3 py-2 font-normal">Статус</th>
+                  <th className="text-left px-3 py-2 font-normal">Действия</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filtered.map((a) => (
+                  <tr key={a.id} className="border-t border-slate-800/80">
+                    <td className="px-3 py-2">{a.date}</td>
+                    <td className="px-3 py-2">{a.startTime}</td>
+                    <td className="px-3 py-2">{a.clientName}</td>
+                    <td className="px-3 py-2">{a.serviceName}</td>
+                    <td className="px-3 py-2">
+                      <Badge tone={mapStatusTone(a.status)}>{a.statusLabel}</Badge>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex gap-1.5 flex-wrap">
+                        {a.status === "pending" && (
+                          <button
+                            type="button"
+                            onClick={() => updateStatus(a.id, "confirmed")}
+                            className="px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/50 text-emerald-200 hover:bg-emerald-500/30 transition"
+                          >
+                            Подтвердить
+                          </button>
+                        )}
+                        {a.status !== "cancelled" && (
+                          <button
+                            type="button"
+                            onClick={() => updateStatus(a.id, "cancelled")}
+                            className="px-2 py-1 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition"
+                          >
+                            Отменить
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => openReschedule(a)}
+                          className="px-2 py-1 rounded-full border border-slate-700 text-slate-200 hover:bg-slate-900 transition"
+                        >
+                          Перенести
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="px-3 py-4 text-center text-slate-400 border-t border-slate-800/80"
+                    >
+                      Записей по выбранным фильтрам не найдено.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {rescheduleAppointment && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80"
+            onClick={() => !rescheduleSaving && setRescheduleAppointment(null)}
+          >
+            <div
+              className="bg-slate-900 border border-slate-700 rounded-2xl p-4 w-full max-w-sm shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-sm font-semibold text-slate-100 mb-2">
+                Перенести запись: {rescheduleAppointment.clientName}
+              </h3>
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-slate-400 mb-1">Новая дата</label>
+                  <input
+                    type="date"
+                    value={rescheduleDate}
+                    onChange={(e) => setRescheduleDate(e.target.value)}
+                    min={now}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2 outline-none focus:border-emerald-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1">Время</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {RESCHEDULE_SLOTS.map((slot) => (
+                      <button
+                        key={slot}
+                        type="button"
+                        onClick={() => setRescheduleTime(slot)}
+                        className={`px-2 py-1 rounded-lg border transition ${
+                          rescheduleTime === slot
+                            ? "bg-emerald-500 border-emerald-500 text-slate-950"
+                            : "border-slate-600 text-slate-300 hover:border-slate-500"
+                        }`}
+                      >
+                        {slot}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button
+                  type="button"
+                  onClick={saveReschedule}
+                  disabled={rescheduleSaving || !rescheduleDate || !rescheduleTime}
+                  className="px-3 py-2 rounded-xl bg-emerald-500 text-slate-950 font-medium hover:bg-emerald-400 disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {rescheduleSaving ? "Сохранение…" : "Сохранить"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => !rescheduleSaving && setRescheduleAppointment(null)}
+                  className="px-3 py-2 rounded-xl border border-slate-600 text-slate-300 hover:bg-slate-800"
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </AdminShell>
