@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   HomePage,
@@ -12,16 +12,45 @@ import {
   AdminServicesPage,
   NotFoundPage
 } from "./pages.jsx";
+import { supabase } from "./supabaseClient.js";
 
-// Простейший контекст для глобальных уведомлений
+// Редирект на /login при входе в админку без авторизации
+const AdminGuard = ({ children }) => {
+  const { user, authLoading } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate("/login", { state: { from: location.pathname }, replace: true });
+    }
+  }, [user, authLoading, navigate, location.pathname]);
+
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-slate-400 text-sm">
+        Загрузка...
+      </div>
+    );
+  }
+  if (!user) return null;
+  return children;
+};
+
+// Контекст уведомлений
 const NotificationsContext = createContext(null);
-
 export const useNotifications = () => useContext(NotificationsContext);
+
+// Контекст авторизации Supabase Auth
+const AuthContext = createContext(null);
+export const useAuth = () => useContext(AuthContext);
 
 const AppLayout = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { notifications, unreadCount, clearNotifications } = useNotifications();
+  const { user, authLoading, signOut } = useAuth();
 
   const navLinkClass = ({ isActive }) =>
     `px-3 py-2 text-sm font-medium rounded-full transition ${
@@ -61,9 +90,27 @@ const AppLayout = ({ children }) => {
             <NavLink to="/my-appointments" className={navLinkClass}>
               Мои записи
             </NavLink>
-            <NavLink to="/login" className={navLinkClass}>
-              Войти
-            </NavLink>
+            {user ? (
+              <>
+                <span className="px-3 py-2 text-sm text-slate-300 truncate max-w-[140px]" title={user.email}>
+                  {user.email}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    signOut();
+                    navigate("/");
+                  }}
+                  className="px-3 py-2 text-sm font-medium rounded-full text-slate-200 hover:bg-slate-800 hover:text-white transition"
+                >
+                  Выйти
+                </button>
+              </>
+            ) : (
+              <NavLink to="/login" className={navLinkClass}>
+                Войти
+              </NavLink>
+            )}
             <NavLink to="/admin" className={navLinkClass}>
               Для косметолога
             </NavLink>
@@ -160,13 +207,48 @@ const ToastContainer = () => {
 
 const App = () => {
   const [notifications, setNotifications] = useState([]);
+  const [user, setUser] = useState(null);
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      setUser(s?.user ?? null);
+      setAuthLoading(false);
+    });
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      setUser(s?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const signIn = useCallback(async (email, password) => {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    return { data, error };
+  }, []);
+
+  const signUp = useCallback(async (email, password, fullName) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: fullName || undefined } }
+    });
+    return { data, error };
+  }, []);
+
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
+  }, []);
 
   const pushNotification = useCallback((message, type = "info") => {
     setNotifications((prev) => [
       ...prev,
       { id: Date.now() + Math.random(), message, type }
     ]);
-    // Автоочистка последних уведомлений
     setTimeout(() => {
       setNotifications((prev) => prev.slice(1));
     }, 3500);
@@ -176,30 +258,41 @@ const App = () => {
     setNotifications([]);
   }, []);
 
-  const contextValue = {
+  const notificationsValue = {
     notifications,
     unreadCount: notifications.length,
     pushNotification,
     clearNotifications
   };
 
+  const authValue = {
+    user,
+    session,
+    authLoading,
+    signIn,
+    signUp,
+    signOut
+  };
+
   return (
-    <NotificationsContext.Provider value={contextValue}>
-      <AppLayout>
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/services" element={<ServicesPage />} />
-          <Route path="/booking" element={<BookingPage />} />
-          <Route path="/my-appointments" element={<MyAppointmentsPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/admin" element={<AdminDashboardPage />} />
-          <Route path="/admin/schedule" element={<AdminSchedulePage />} />
-          <Route path="/admin/appointments" element={<AdminAppointmentsPage />} />
-          <Route path="/admin/services" element={<AdminServicesPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </AppLayout>
-      <ToastContainer />
+    <NotificationsContext.Provider value={notificationsValue}>
+      <AuthContext.Provider value={authValue}>
+        <AppLayout>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/services" element={<ServicesPage />} />
+            <Route path="/booking" element={<BookingPage />} />
+            <Route path="/my-appointments" element={<MyAppointmentsPage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/admin" element={<AdminGuard><AdminDashboardPage /></AdminGuard>} />
+            <Route path="/admin/schedule" element={<AdminGuard><AdminSchedulePage /></AdminGuard>} />
+            <Route path="/admin/appointments" element={<AdminGuard><AdminAppointmentsPage /></AdminGuard>} />
+            <Route path="/admin/services" element={<AdminGuard><AdminServicesPage /></AdminGuard>} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </AppLayout>
+        <ToastContainer />
+      </AuthContext.Provider>
     </NotificationsContext.Provider>
   );
 };

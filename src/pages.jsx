@@ -1,78 +1,80 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { useNotifications } from "./App.jsx";
+import { useNotifications, useAuth } from "./App.jsx";
+import { supabase } from "./supabaseClient.js";
 
-// ---- Моковые данные для услуг и записей ----
+// ---- Вспомогательные хуки для Supabase ----
 
-const SERVICES = [
-  {
-    id: "facial-clean",
-    name: "Чистка лица",
-    category: "лицо",
-    durationMin: 60,
-    price: 3500,
-    description: "Глубокая очищающая процедура для здоровой и свежей кожи.",
-    image:
-      "https://images.pexels.com/photos/3738341/pexels-photo-3738341.jpeg?auto=compress&cs=tinysrgb&w=800"
-  },
-  {
-    id: "facial-anti-age",
-    name: "Anti-age уход",
-    category: "лицо",
-    durationMin: 75,
-    price: 4800,
-    description: "Комплексный уход, направленный на улучшение упругости и тона кожи.",
-    image:
-      "https://images.pexels.com/photos/3738344/pexels-photo-3738344.jpeg?auto=compress&cs=tinysrgb&w=800"
-  },
-  {
-    id: "body-massage",
-    name: "Расслабляющий массаж тела",
-    category: "тело",
-    durationMin: 90,
-    price: 5200,
-    description: "Глубокое расслабление мышц и снятие напряжения после рабочего дня.",
-    image:
-      "https://images.pexels.com/photos/3738342/pexels-photo-3738342.jpeg?auto=compress&cs=tinysrgb&w=800"
-  },
-  {
-    id: "depilation",
-    name: "Депиляция воском",
-    category: "депиляция",
-    durationMin: 45,
-    price: 2600,
-    description: "Быстрая и аккуратная депиляция с длительным результатом.",
-    image:
-      "https://images.pexels.com/photos/3738343/pexels-photo-3738343.jpeg?auto=compress&cs=tinysrgb&w=800"
+const useServices = () => {
+  const [services, setServices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchServices = async () => {
+      setLoading(true);
+      const { data, error: err } = await supabase
+        .from("services")
+        .select("*")
+        .eq("is_active", true)
+        .order("name", { ascending: true });
+
+      if (!isMounted) return;
+
+      if (err) {
+        setError(err.message);
+        setServices([]);
+      } else {
+        // Приводим поля к формату, который уже использует UI
+        const normalized =
+          (data || []).map((s) => ({
+            id: s.id,
+            name: s.name,
+            category: s.category,
+            durationMin: s.duration_min,
+            price: Number(s.price),
+            description: s.description,
+            image: s.image_url
+          })) ?? [];
+        setServices(normalized);
+        setError(null);
+      }
+      setLoading(false);
+    };
+    fetchServices();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  return { services, loading, error };
+};
+
+const mapStatusLabel = (status) => {
+  switch (status) {
+    case "confirmed":
+      return "подтверждена";
+    case "cancelled":
+      return "отменена";
+    case "completed":
+      return "завершена";
+    case "pending":
+    default:
+      return "ожидает подтверждения";
   }
-];
+};
 
-const INITIAL_APPOINTMENTS = [
-  {
-    id: "a1",
-    serviceId: "facial-clean",
-    serviceName: "Чистка лица",
-    date: "2026-03-10",
-    startTime: "11:00",
-    endTime: "12:00",
-    status: "подтверждена",
-    clientName: "Анна",
-    clientPhone: "+7 900 000-00-01",
-    comment: "Чувствительная кожа"
-  },
-  {
-    id: "a2",
-    serviceId: "body-massage",
-    serviceName: "Расслабляющий массаж тела",
-    date: "2026-03-09",
-    startTime: "18:00",
-    endTime: "19:30",
-    status: "завершена",
-    clientName: "Мария",
-    clientPhone: "+7 900 000-00-02",
-    comment: ""
+const mapStatusTone = (status) => {
+  switch (status) {
+    case "confirmed":
+      return "success";
+    case "cancelled":
+      return "danger";
+    default:
+      return "warning";
   }
-];
+};
 
 // ---- Вспомогательные компоненты ----
 
@@ -212,6 +214,7 @@ export const HomePage = () => {
 export const ServicesPage = () => {
   const [category, setCategory] = useState("all");
   const [search, setSearch] = useState("");
+  const { services, loading, error } = useServices();
   const navigate = useNavigate();
 
   const categories = useMemo(
@@ -219,7 +222,7 @@ export const ServicesPage = () => {
     []
   );
 
-  const filteredServices = SERVICES.filter((s) => {
+  const filteredServices = services.filter((s) => {
     const byCategory = category === "all" || s.category === category;
     const bySearch =
       !search ||
@@ -276,7 +279,17 @@ export const ServicesPage = () => {
         </div>
       </div>
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {loading && (
+        <div className="text-xs text-slate-400">Загрузка услуг...</div>
+      )}
+      {error && !loading && (
+        <div className="text-xs text-rose-400">
+          Не удалось загрузить услуги: {error}
+        </div>
+      )}
+
+      {!loading && !error && (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredServices.map((service) => (
           <article
             key={service.id}
@@ -310,9 +323,10 @@ export const ServicesPage = () => {
             </div>
           </article>
         ))}
-      </div>
+        </div>
+      )}
 
-      {filteredServices.length === 0 && (
+      {!loading && !error && filteredServices.length === 0 && (
         <div className="text-xs text-slate-400">
           По выбранным фильтрам услуг не найдено. Попробуйте изменить категорию или запрос.
         </div>
@@ -329,9 +343,7 @@ export const BookingPage = () => {
   const timeFromUrl = searchParams.get("time");
 
   const [step, setStep] = useState(1);
-  const [selectedServiceId, setSelectedServiceId] = useState(
-    serviceIdFromUrl || SERVICES[0]?.id
-  );
+  const [selectedServiceId, setSelectedServiceId] = useState(serviceIdFromUrl || "");
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedTime, setSelectedTime] = useState(timeFromUrl || "");
   const [clientData, setClientData] = useState({
@@ -344,11 +356,21 @@ export const BookingPage = () => {
   });
   const [createdAppointment, setCreatedAppointment] = useState(null);
   const [errors, setErrors] = useState({});
+  const [submitting, setSubmitting] = useState(false);
 
   const { pushNotification } = useNotifications();
+  const { user } = useAuth();
   const navigate = useNavigate();
 
-  const selectedService = SERVICES.find((s) => s.id === selectedServiceId);
+  const { services, loading: servicesLoading, error: servicesError } = useServices();
+
+  useEffect(() => {
+    if (!selectedServiceId && services.length) {
+      setSelectedServiceId(serviceIdFromUrl || services[0].id);
+    }
+  }, [services, selectedServiceId, serviceIdFromUrl]);
+
+  const selectedService = services.find((s) => s.id === selectedServiceId);
 
   const slots = useMemo(
     () => [
@@ -409,25 +431,67 @@ export const BookingPage = () => {
   };
 
   const handleConfirm = () => {
-    // Дополнительная проверка перед финальным подтверждением
     if (!selectedService || !selectedDate || !selectedTime) {
       pushNotification("Заполнение шагов записи не завершено", "error");
       return;
     }
-    const newAppointment = {
-      id: `local-${Date.now()}`,
-      serviceId: selectedService.id,
-      serviceName: selectedService.name,
-      date: selectedDate,
-      startTime: selectedTime,
-      endTime: "", // можно высчитать по длительности
-      status: "ожидает подтверждения",
-      clientName: clientData.name,
-      clientPhone: clientData.phone,
-      comment: clientData.comment
+    if (!user) {
+      pushNotification("Войдите в аккаунт, чтобы записаться", "error");
+      navigate("/login");
+      return;
+    }
+    const create = async () => {
+      setSubmitting(true);
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!profile?.id) {
+        setSubmitting(false);
+        pushNotification("Профиль не найден. Войдите снова или обратитесь в поддержку.", "error");
+        return;
+      }
+      const payload = {
+        service_id: selectedService.id,
+        client_profile_id: profile.id,
+        client_name: clientData.name,
+        client_phone: clientData.phone,
+        comment: clientData.comment || null,
+        date: selectedDate,
+        start_time: selectedTime,
+        end_time: selectedTime,
+        status: "pending"
+      };
+      const { data, error } = await supabase
+        .from("appointments")
+        .insert([payload])
+        .select(
+          `
+            id,
+            date,
+            start_time,
+            end_time,
+            status,
+            client_name,
+            client_phone,
+            comment
+          `
+        )
+        .single();
+
+      setSubmitting(false);
+
+      if (error) {
+        pushNotification("Не удалось создать запись: " + error.message, "error");
+        return;
+      }
+
+      setCreatedAppointment(data);
+      pushNotification("Запись успешно создана! Мы напомним о визите.", "info");
     };
-    setCreatedAppointment(newAppointment);
-    pushNotification("Запись успешно создана! Мы напомним о визите.", "info");
+
+    create();
   };
 
   return (
@@ -445,8 +509,23 @@ export const BookingPage = () => {
 
       <div className="grid md:grid-cols-[minmax(0,2fr),minmax(0,1fr)] gap-6 items-start">
         <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-4">
-          {step === 1 && (
+          {servicesLoading && (
+            <p className="text-xs text-slate-400">Загрузка услуг...</p>
+          )}
+          {servicesError && (
+            <p className="text-xs text-rose-400">
+              Не удалось загрузить услуги: {servicesError}
+            </p>
+          )}
+          {!servicesLoading && !servicesError && services.length === 0 && (
+            <p className="text-xs text-slate-400">
+              Услуги пока не настроены. Обратитесь к администратору.
+            </p>
+          )}
+
+          {!servicesLoading && !servicesError && services.length > 0 && step === 1 && (
             <StepSelectService
+              services={services}
               selectedServiceId={selectedServiceId}
               setSelectedServiceId={setSelectedServiceId}
               error={errors.service}
@@ -482,6 +561,15 @@ export const BookingPage = () => {
               clientData={clientData}
             />
           )}
+          {step === 4 && !user && (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              Чтобы подтвердить запись, нужно{" "}
+              <Link to="/login" className="font-semibold underline hover:text-amber-100">
+                войти в аккаунт
+              </Link>
+              .
+            </div>
+          )}
 
           <div className="flex items-center justify-between pt-3 border-t border-slate-800">
             <button
@@ -502,9 +590,10 @@ export const BookingPage = () => {
                   </button>
                   <button
                     onClick={handleConfirm}
+                    disabled={submitting}
                     className="text-xs px-3 py-2 rounded-full bg-emerald-500 text-slate-950 font-semibold hover:bg-emerald-400 transition"
                   >
-                    Подтвердить запись
+                    {submitting ? "Создание..." : "Подтвердить запись"}
                   </button>
                 </>
               ) : (
@@ -573,7 +662,7 @@ const BookingStepsIndicator = ({ step }) => {
   );
 };
 
-const StepSelectService = ({ selectedServiceId, setSelectedServiceId, error }) => {
+const StepSelectService = ({ services, selectedServiceId, setSelectedServiceId, error }) => {
   return (
     <div className="space-y-3">
       <h3 className="text-sm font-semibold">Шаг 1. Выбор услуги</h3>
@@ -590,7 +679,7 @@ const StepSelectService = ({ selectedServiceId, setSelectedServiceId, error }) =
             : "border border-slate-700 focus:border-emerald-400"
         }`}
       >
-        {SERVICES.map((s) => (
+        {services.map((s) => (
           <option key={s.id} value={s.id}>
             {s.name} • {s.durationMin} мин • {s.price.toLocaleString()} ₽
           </option>
@@ -600,10 +689,10 @@ const StepSelectService = ({ selectedServiceId, setSelectedServiceId, error }) =
       {selectedServiceId && (
         <div className="mt-2 rounded-xl border border-slate-800 bg-slate-950/80 p-3 text-xs space-y-1">
           <div className="font-semibold">
-            {SERVICES.find((s) => s.id === selectedServiceId)?.name}
+            {services.find((s) => s.id === selectedServiceId)?.name}
           </div>
           <div className="text-slate-400">
-            {SERVICES.find((s) => s.id === selectedServiceId)?.description}
+            {services.find((s) => s.id === selectedServiceId)?.description}
           </div>
         </div>
       )}
@@ -874,19 +963,73 @@ const SummaryPanel = ({ selectedService, selectedDate, selectedTime, clientData 
 
 export const MyAppointmentsPage = () => {
   const [tab, setTab] = useState("upcoming");
-  const [appointments, setAppointments] = useState(INITIAL_APPOINTMENTS);
+  const [appointments, setAppointments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const { pushNotification } = useNotifications();
 
   const nowDate = "2026-03-09";
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchAppointments = async () => {
+      setLoading(true);
+      const { data, error: err } = await supabase
+        .from("appointments")
+        .select(
+          `
+          id,
+          date,
+          start_time,
+          end_time,
+          status,
+          client_name,
+          client_phone,
+          comment,
+          service:services ( name )
+        `
+        )
+        .order("date", { ascending: true })
+        .order("start_time", { ascending: true });
+
+      if (!isMounted) return;
+
+      if (err) {
+        setError(err.message);
+        setAppointments([]);
+      } else {
+        const normalized =
+          (data || []).map((a) => ({
+            id: a.id,
+            date: a.date,
+            startTime: a.start_time,
+            endTime: a.end_time,
+            status: a.status,
+            statusLabel: mapStatusLabel(a.status),
+            serviceName: a.service?.name || "Услуга",
+            clientName: a.client_name,
+            clientPhone: a.client_phone,
+            comment: a.comment
+          })) ?? [];
+        setAppointments(normalized);
+        setError(null);
+      }
+      setLoading(false);
+    };
+    fetchAppointments();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const splitAppointments = useMemo(() => {
     const upcoming = [];
     const past = [];
     const canceled = [];
     for (const a of appointments) {
-      if (a.status === "отменена") {
+      if (a.status === "cancelled") {
         canceled.push(a);
-      } else if (a.date >= nowDate && a.status !== "завершена") {
+      } else if (a.date >= nowDate && a.status !== "completed") {
         upcoming.push(a);
       } else {
         past.push(a);
@@ -902,14 +1045,27 @@ export const MyAppointmentsPage = () => {
       ? splitAppointments.past
       : splitAppointments.canceled;
 
-  const updateStatus = (id, status) => {
+  const updateStatus = async (id, status) => {
+    const { error: err } = await supabase
+      .from("appointments")
+      .update({ status })
+      .eq("id", id);
+    if (err) {
+      pushNotification("Не удалось обновить запись: " + err.message, "error");
+      return;
+    }
     setAppointments((prev) => prev.map((a) => (a.id === id ? { ...a, status } : a)));
-    if (status === "отменена") {
+    if (status === "cancelled") {
       pushNotification("Запись отменена", "info");
     }
   };
 
-  const deleteAppointment = (id) => {
+  const deleteAppointment = async (id) => {
+    const { error: err } = await supabase.from("appointments").delete().eq("id", id);
+    if (err) {
+      pushNotification("Не удалось удалить запись: " + err.message, "error");
+      return;
+    }
     setAppointments((prev) => prev.filter((a) => a.id !== id));
     pushNotification("Прошедшая запись удалена из списка", "info");
   };
@@ -951,132 +1107,178 @@ export const MyAppointmentsPage = () => {
         </div>
       </div>
 
-      {currentList.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 p-6 text-xs text-slate-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <div className="font-semibold text-slate-200 mb-1">
-              У вас пока нет записей в этом разделе
-            </div>
-            <p>
-              Запишитесь на удобное время, и здесь появится список ваших процедур и
-              статусы броней.
-            </p>
-          </div>
-          <Link
-            to="/booking"
-            className="inline-flex items-center px-4 py-2 rounded-full bg-emerald-500 text-slate-950 text-xs font-semibold hover:bg-emerald-400 transition"
-          >
-            Записаться →
-          </Link>
+      {loading && (
+        <div className="text-xs text-slate-400">Загрузка ваших записей...</div>
+      )}
+      {error && !loading && (
+        <div className="text-xs text-rose-400">
+          Не удалось загрузить записи: {error}
         </div>
-      ) : (
-        <div className="space-y-3">
-          {currentList.map((a) => (
-            <div
-              key={a.id}
-              className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+      )}
+
+      {!loading && !error && (
+        currentList.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/60 p-6 text-xs text-slate-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="font-semibold text-slate-200 mb-1">
+                У вас пока нет записей в этом разделе
+              </div>
+              <p>
+                Запишитесь на удобное время, и здесь появится список ваших процедур и
+                статусы броней.
+              </p>
+            </div>
+            <Link
+              to="/booking"
+              className="inline-flex items-center px-4 py-2 rounded-full bg-emerald-500 text-slate-950 text-xs font-semibold hover:bg-emerald-400 transition"
             >
-              <div className="space-y-1">
-                <div className="font-semibold text-slate-100">{a.serviceName}</div>
-                <div className="text-slate-300">
-                  {a.date} • {a.startTime}
+              Записаться →
+            </Link>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {currentList.map((a) => (
+              <div
+                key={a.id}
+                className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+              >
+                <div className="space-y-1">
+                  <div className="font-semibold text-slate-100">{a.serviceName}</div>
+                  <div className="text-slate-300">
+                    {a.date} • {a.startTime}
+                  </div>
+                  <div className="text-slate-400">
+                    {a.clientName} • {a.clientPhone}
+                  </div>
                 </div>
-                <div className="text-slate-400">
-                  {a.clientName} • {a.clientPhone}
-                </div>
-              </div>
-              <div className="flex flex-col sm:items-end gap-2">
-                <Badge
-                  tone={
-                    a.status === "подтверждена"
-                      ? "success"
-                      : a.status === "отменена"
-                      ? "danger"
-                      : "warning"
-                  }
-                >
-                  {a.status}
-                </Badge>
-                {tab === "upcoming" && (
-                  <div className="flex gap-2">
-                    {a.status !== "отменена" && (
-                      <button
-                        onClick={() => updateStatus(a.id, "отменена")}
-                        className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition"
-                      >
-                        Отменить
+                <div className="flex flex-col sm:items-end gap-2">
+                  <Badge tone={mapStatusTone(a.status)}>{a.statusLabel}</Badge>
+                  {tab === "upcoming" && (
+                    <div className="flex gap-2">
+                      {a.status !== "cancelled" && (
+                        <button
+                          onClick={() => updateStatus(a.id, "cancelled")}
+                          className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition"
+                        >
+                          Отменить
+                        </button>
+                      )}
+                      <button className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-slate-900 transition">
+                        Перенести
                       </button>
-                    )}
-                    <button className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-slate-900 transition">
-                      Перенести
-                    </button>
-                  </div>
-                )}
-                {tab === "past" && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => deleteAppointment(a.id)}
-                      className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-rose-600/20 hover:border-rose-500/60 hover:text-rose-100 transition"
-                    >
-                      Удалить запись
-                    </button>
-                  </div>
-                )}
+                    </div>
+                  )}
+                  {tab === "past" && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => deleteAppointment(a.id)}
+                        className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-rose-600/20 hover:border-rose-500/60 hover:text-rose-100 transition"
+                      >
+                        Удалить запись
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )
       )}
     </div>
   );
 };
 
-// ---- 5. Вход / выбор роли ----
+// ---- 5. Вход через Supabase Auth ----
 
 export const LoginPage = () => {
+  const [mode, setMode] = useState("login");
   const [role, setRole] = useState("client");
-  const [adminCredentials, setAdminCredentials] = useState({
-    login: "",
-    password: ""
-  });
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
   const [errors, setErrors] = useState({});
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
+  const { signIn, signUp, user } = useAuth();
+  const { pushNotification } = useNotifications();
 
-  const handleSubmit = (e) => {
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (cancelled) return;
+      const profileRole = data?.role;
+      if (profileRole === "cosmetologist" || profileRole === "admin") {
+        navigate("/admin");
+      } else {
+        navigate("/my-appointments");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, navigate]);
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (role === "admin") {
-      const nextErrors = {};
-      if (!adminCredentials.login.trim()) {
-        nextErrors.login = "Введите логин";
-      }
-      if (!adminCredentials.password.trim()) {
-        nextErrors.password = "Введите пароль";
-      }
-      setErrors(nextErrors);
-      if (Object.keys(nextErrors).length > 0) {
+    const nextErrors = {};
+    if (!email.trim()) {
+      nextErrors.email = "Введите email";
+    }
+    if (!password) {
+      nextErrors.password = "Введите пароль";
+    }
+    if (mode === "register" && password.length < 6) {
+      nextErrors.password = "Пароль не менее 6 символов";
+    }
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+
+    setSubmitting(true);
+    setErrors({});
+
+    if (mode === "register") {
+      const { data, error } = await signUp(email.trim(), password, fullName.trim());
+      setSubmitting(false);
+      if (error) {
+        setErrors({ form: error.message });
         return;
       }
+      if (data?.user && !data.session) {
+        pushNotification("Проверьте почту: отправлена ссылка для подтверждения.", "info");
+        setMode("login");
+        setPassword("");
+        return;
+      }
+      pushNotification("Регистрация успешна.", "info");
+    } else {
+      const { error } = await signIn(email.trim(), password);
+      setSubmitting(false);
+      if (error) {
+        setErrors({ form: error.message });
+        return;
+      }
+      // Редирект произойдёт в useEffect при обновлении user
     }
-    navigate(role === "client" ? "/my-appointments" : "/admin");
   };
 
   return (
     <div className="max-w-md mx-auto space-y-5">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight mb-1">Вход / выбор роли</h2>
+        <h2 className="text-2xl font-semibold tracking-tight mb-1">Вход</h2>
         <p className="text-xs text-slate-400">
-          Для демонстрации интерфейса можно переключаться между ролями клиента и
-          косметолога без настоящей авторизации.
+          Войдите как клиент или косметолог. После входа вы попадёте в свой раздел в зависимости от роли.
         </p>
       </div>
 
       <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-4 text-xs">
         <div className="flex gap-2">
           <button
-            onClick={() => {
-              setRole("client");
-              setErrors({});
-            }}
+            type="button"
+            onClick={() => { setRole("client"); setErrors({}); }}
             className={`flex-1 px-3 py-2 rounded-full border ${
               role === "client"
                 ? "border-emerald-400 bg-emerald-500/15 text-emerald-100"
@@ -1086,10 +1288,8 @@ export const LoginPage = () => {
             Я клиент
           </button>
           <button
-            onClick={() => {
-              setRole("admin");
-              setErrors({});
-            }}
+            type="button"
+            onClick={() => { setRole("admin"); setErrors({}); }}
             className={`flex-1 px-3 py-2 rounded-full border ${
               role === "admin"
                 ? "border-fuchsia-400 bg-fuchsia-500/15 text-fuchsia-100"
@@ -1101,59 +1301,64 @@ export const LoginPage = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          {role === "admin" && (
-            <>
-              <div className="space-y-1.5">
-                <label className="text-slate-300">Логин</label>
-                <input
-                  value={adminCredentials.login}
-                  onChange={(e) =>
-                    setAdminCredentials((prev) => ({ ...prev, login: e.target.value }))
-                  }
-                  placeholder="demo"
-                  className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
-                    errors.login
-                      ? "border border-rose-500 focus:border-rose-400"
-                      : "border border-slate-700 focus:border-fuchsia-400"
-                  }`}
-                />
-                {errors.login && (
-                  <p className="text-[11px] text-rose-400">{errors.login}</p>
-                )}
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-slate-300">Пароль</label>
-                <input
-                  value={adminCredentials.password}
-                  onChange={(e) =>
-                    setAdminCredentials((prev) => ({ ...prev, password: e.target.value }))
-                  }
-                  placeholder="demo"
-                  type="password"
-                  className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
-                    errors.password
-                      ? "border border-rose-500 focus:border-rose-400"
-                      : "border border-slate-700 focus:border-fuchsia-400"
-                  }`}
-                />
-                {errors.password && (
-                  <p className="text-[11px] text-rose-400">{errors.password}</p>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Для V1 это заглушка: при нажатии кнопки вы просто попадаете в панель
-                косметолога.
-              </p>
-            </>
+          {mode === "register" && (
+            <div className="space-y-1.5">
+              <label className="text-slate-300">Имя</label>
+              <input
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Как к вам обращаться"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none text-xs focus:border-emerald-400"
+              />
+            </div>
           )}
-
+          <div className="space-y-1.5">
+            <label className="text-slate-300">Email *</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="your@email.com"
+              className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
+                errors.email ? "border border-rose-500" : "border border-slate-700 focus:border-emerald-400"
+              }`}
+            />
+            {errors.email && <p className="text-[11px] text-rose-400">{errors.email}</p>}
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-slate-300">Пароль *</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
+                errors.password ? "border border-rose-500" : "border border-slate-700 focus:border-emerald-400"
+              }`}
+            />
+            {errors.password && <p className="text-[11px] text-rose-400">{errors.password}</p>}
+          </div>
+          {errors.form && (
+            <p className="text-[11px] text-rose-400">{errors.form}</p>
+          )}
           <button
             type="submit"
-            className="w-full px-4 py-2.5 rounded-full bg-emerald-500 text-slate-950 text-xs font-semibold hover:bg-emerald-400 transition"
+            disabled={submitting}
+            className="w-full px-4 py-2.5 rounded-full bg-emerald-500 text-slate-950 text-xs font-semibold hover:bg-emerald-400 transition disabled:opacity-60"
           >
-            Продолжить
+            {submitting ? "Проверка..." : mode === "login" ? "Войти" : "Зарегистрироваться"}
           </button>
         </form>
+
+        <div className="border-t border-slate-800 pt-3 text-center">
+          <button
+            type="button"
+            onClick={() => { setMode(mode === "login" ? "register" : "login"); setErrors({}); }}
+            className="text-slate-400 hover:text-slate-200 text-[11px]"
+          >
+            {mode === "login" ? "Нет аккаунта? Зарегистрироваться" : "Уже есть аккаунт? Войти"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1200,9 +1405,60 @@ const AdminShell = ({ title, description, children }) => {
 };
 
 export const AdminDashboardPage = () => {
-  const todayAppointments = INITIAL_APPOINTMENTS.filter(
-    (a) => a.date === "2026-03-09"
-  );
+  const [todayAppointments, setTodayAppointments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchToday = async () => {
+      setLoading(true);
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error: err } = await supabase
+        .from("appointments")
+        .select(
+          `
+          id,
+          date,
+          start_time,
+          end_time,
+          status,
+          client_name,
+          client_phone,
+          service:services ( name )
+        `
+        )
+        .eq("date", today)
+        .order("start_time", { ascending: true });
+
+      if (!isMounted) return;
+
+      if (err) {
+        setError(err.message);
+        setTodayAppointments([]);
+      } else {
+        const normalized =
+          (data || []).map((a) => ({
+            id: a.id,
+            date: a.date,
+            startTime: a.start_time,
+            endTime: a.end_time,
+            status: a.status,
+            statusLabel: mapStatusLabel(a.status),
+            serviceName: a.service?.name || "Услуга",
+            clientName: a.client_name,
+            clientPhone: a.client_phone
+          })) ?? [];
+        setTodayAppointments(normalized);
+        setError(null);
+      }
+      setLoading(false);
+    };
+    fetchToday();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <AdminShell
@@ -1251,7 +1507,15 @@ export const AdminDashboardPage = () => {
         <div className="space-y-2">
           <h3 className="text-sm font-semibold">Записи на сегодня</h3>
           <div className="space-y-2 text-xs">
-            {todayAppointments.length === 0 ? (
+            {loading && (
+              <div className="text-slate-400">Загрузка записей на сегодня...</div>
+            )}
+            {error && !loading && (
+              <div className="text-rose-400">
+                Не удалось загрузить записи на сегодня: {error}
+              </div>
+            )}
+            {!loading && !error && todayAppointments.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/70 p-4 text-slate-400">
                 На сегодня пока нет записей. Свободные слоты можно открыть в разделе
                 &laquo;Расписание&raquo;.
@@ -1271,7 +1535,7 @@ export const AdminDashboardPage = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge tone="success">подтверждена</Badge>
+                    <Badge tone={mapStatusTone(a.status)}>{a.statusLabel}</Badge>
                     <button className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition">
                       Отменить
                     </button>
@@ -1401,8 +1665,61 @@ export const AdminSchedulePage = () => {
 export const AdminAppointmentsPage = () => {
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [appointments, setAppointments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const filtered = INITIAL_APPOINTMENTS.filter((a) => {
+  useEffect(() => {
+    let isMounted = true;
+    const fetchAll = async () => {
+      setLoading(true);
+      const { data, error: err } = await supabase
+        .from("appointments")
+        .select(
+          `
+          id,
+          date,
+          start_time,
+          end_time,
+          status,
+          client_name,
+          client_phone,
+          comment,
+          service:services ( name )
+        `
+        )
+        .order("date", { ascending: true })
+        .order("start_time", { ascending: true });
+
+      if (!isMounted) return;
+
+      if (err) {
+        setError(err.message);
+        setAppointments([]);
+      } else {
+        const normalized =
+          (data || []).map((a) => ({
+            id: a.id,
+            date: a.date,
+            startTime: a.start_time,
+            status: a.status,
+            statusLabel: mapStatusLabel(a.status),
+            serviceName: a.service?.name || "Услуга",
+            clientName: a.client_name,
+            clientPhone: a.client_phone
+          })) ?? [];
+        setAppointments(normalized);
+        setError(null);
+      }
+      setLoading(false);
+    };
+    fetchAll();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const filtered = appointments.filter((a) => {
     const byStatus = statusFilter === "all" || a.status === statusFilter;
     const bySearch =
       !search ||
@@ -1436,7 +1753,15 @@ export const AdminAppointmentsPage = () => {
           />
         </div>
 
-        <div className="rounded-2xl border border-slate-800 bg-slate-950/80 overflow-hidden">
+        {loading && (
+          <div className="text-slate-400">Загрузка записей...</div>
+        )}
+        {error && !loading && (
+          <div className="text-rose-400">Не удалось загрузить записи: {error}</div>
+        )}
+
+        {!loading && !error && (
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/80 overflow-hidden">
           <table className="w-full text-[11px]">
             <thead className="bg-slate-900/80 text-slate-400">
               <tr>
@@ -1455,17 +1780,7 @@ export const AdminAppointmentsPage = () => {
                   <td className="px-3 py-2">{a.clientName}</td>
                   <td className="px-3 py-2">{a.serviceName}</td>
                   <td className="px-3 py-2">
-                    <Badge
-                      tone={
-                        a.status === "подтверждена"
-                          ? "success"
-                          : a.status === "отменена"
-                          ? "danger"
-                          : "warning"
-                      }
-                    >
-                      {a.status}
-                    </Badge>
+                    <Badge tone={mapStatusTone(a.status)}>{a.statusLabel}</Badge>
                   </td>
                 </tr>
               ))}
@@ -1482,54 +1797,235 @@ export const AdminAppointmentsPage = () => {
             </tbody>
           </table>
         </div>
+        )}
       </div>
     </AdminShell>
   );
 };
 
 export const AdminServicesPage = () => {
-  const [services] = useState(SERVICES);
+  const { services, loading, error } = useServices();
+  const { pushNotification } = useNotifications();
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    category: "",
+    durationMin: "",
+    price: "",
+    description: "",
+    image: ""
+  });
+  const [formErrors, setFormErrors] = useState({});
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleChange = (field, value) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleAddService = async (event) => {
+    event.preventDefault();
+    const errors = {};
+
+    if (!form.name.trim()) {
+      errors.name = "Введите название услуги";
+    }
+    const duration = parseInt(form.durationMin, 10);
+    if (Number.isNaN(duration) || duration <= 0) {
+      errors.durationMin = "Укажите длительность в минутах";
+    }
+    const price = parseFloat(form.price.toString().replace(",", "."));
+    if (Number.isNaN(price) || price <= 0) {
+      errors.price = "Укажите корректную цену";
+    }
+
+    setFormErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      return;
+    }
+
+    setSubmitting(true);
+    const { error: err } = await supabase.from("services").insert([
+      {
+        name: form.name.trim(),
+        category: form.category.trim() || null,
+        duration_min: duration,
+        price,
+        description: form.description.trim() || null,
+        image_url: form.image.trim() || null,
+        is_active: true
+      }
+    ]);
+    setSubmitting(false);
+
+    if (err) {
+      pushNotification("Не удалось добавить услугу: " + err.message, "error");
+      return;
+    }
+
+    pushNotification("Услуга успешно добавлена", "info");
+    setShowForm(false);
+    setForm({
+      name: "",
+      category: "",
+      durationMin: "",
+      price: "",
+      description: "",
+      image: ""
+    });
+    // Для простоты перезагрузим страницу, чтобы перечитать список услуг
+    window.location.reload();
+  };
 
   return (
     <AdminShell
       title="Услуги для клиентов"
-      description="Каталог процедур, которые видит клиент при записи. В V1 это только список без настоящего редактирования."
+      description="Каталог процедур, которые видит клиент при записи."
     >
       <div className="space-y-3 text-xs">
         <div className="flex justify-between items-center">
           <div className="text-slate-400">
             Всего услуг: <span className="text-slate-100">{services.length}</span>
           </div>
-          <button className="px-3 py-2 rounded-full bg-slate-900 border border-slate-700 text-slate-100 hover:bg-slate-800 transition">
-            Добавить услугу
+          <button
+            onClick={() => setShowForm((prev) => !prev)}
+            className="px-3 py-2 rounded-full bg-slate-900 border border-slate-700 text-slate-100 hover:bg-slate-800 transition"
+          >
+            {showForm ? "Скрыть форму" : "Добавить услугу"}
           </button>
         </div>
-        <div className="space-y-2">
-          {services.map((s) => (
-            <div
-              key={s.id}
-              className="rounded-2xl border border-slate-800 bg-slate-950/80 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-            >
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-slate-100">{s.name}</span>
-                  <Badge>{s.category}</Badge>
-                </div>
-                <div className="text-slate-400">
-                  {s.durationMin} мин • {s.price.toLocaleString()} ₽
-                </div>
+
+        {showForm && (
+          <form
+            onSubmit={handleAddService}
+            className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-3"
+          >
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-slate-300 text-[11px]">Название *</label>
+                <input
+                  value={form.name}
+                  onChange={(e) => handleChange("name", e.target.value)}
+                  className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
+                    formErrors.name
+                      ? "border border-rose-500 focus:border-rose-400"
+                      : "border border-slate-700 focus:border-emerald-400"
+                  }`}
+                />
+                {formErrors.name && (
+                  <p className="text-[11px] text-rose-400">{formErrors.name}</p>
+                )}
               </div>
-              <div className="flex gap-2">
-                <button className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition">
-                  Редактировать
-                </button>
-                <button className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-300 hover:bg-slate-900 transition">
-                  Скрыть
-                </button>
+              <div className="space-y-1.5">
+                <label className="text-slate-300 text-[11px]">Категория</label>
+                <input
+                  value={form.category}
+                  onChange={(e) => handleChange("category", e.target.value)}
+                  placeholder="лицо, тело, депиляция..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none text-xs focus:border-emerald-400"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-slate-300 text-[11px]">Длительность (мин) *</label>
+                <input
+                  value={form.durationMin}
+                  onChange={(e) => handleChange("durationMin", e.target.value)}
+                  className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
+                    formErrors.durationMin
+                      ? "border border-rose-500 focus:border-rose-400"
+                      : "border border-slate-700 focus:border-emerald-400"
+                  }`}
+                />
+                {formErrors.durationMin && (
+                  <p className="text-[11px] text-rose-400">{formErrors.durationMin}</p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-slate-300 text-[11px]">Цена (₽) *</label>
+                <input
+                  value={form.price}
+                  onChange={(e) => handleChange("price", e.target.value)}
+                  className={`w-full bg-slate-900 rounded-xl px-3 py-2 outline-none text-xs ${
+                    formErrors.price
+                      ? "border border-rose-500 focus:border-rose-400"
+                      : "border border-slate-700 focus:border-emerald-400"
+                  }`}
+                />
+                {formErrors.price && (
+                  <p className="text-[11px] text-rose-400">{formErrors.price}</p>
+                )}
               </div>
             </div>
-          ))}
-        </div>
+            <div className="space-y-1.5">
+              <label className="text-slate-300 text-[11px]">Описание</label>
+              <textarea
+                value={form.description}
+                onChange={(e) => handleChange("description", e.target.value)}
+                rows={3}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none text-xs focus:border-emerald-400 resize-none"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-slate-300 text-[11px]">Ссылка на изображение</label>
+              <input
+                value={form.image}
+                onChange={(e) => handleChange("image", e.target.value)}
+                placeholder="https://..."
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none text-xs focus:border-emerald-400"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowForm(false)}
+                className="px-3 py-2 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="px-3 py-2 rounded-full bg-emerald-500 text-slate-950 font-semibold text-xs hover:bg-emerald-400 transition disabled:opacity-60"
+              >
+                {submitting ? "Сохранение..." : "Сохранить услугу"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {loading && (
+          <div className="text-slate-400">Загрузка услуг...</div>
+        )}
+        {error && !loading && (
+          <div className="text-rose-400">Не удалось загрузить услуги: {error}</div>
+        )}
+        {!loading && !error && (
+          <div className="space-y-2">
+            {services.map((s) => (
+              <div
+                key={s.id}
+                className="rounded-2xl border border-slate-800 bg-slate-950/80 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-100">{s.name}</span>
+                    <Badge>{s.category}</Badge>
+                  </div>
+                  <div className="text-slate-400">
+                    {s.durationMin} мин • {s.price.toLocaleString()} ₽
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button className="px-3 py-1.5 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition">
+                    Редактировать
+                  </button>
+                  <button className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-300 hover:bg-slate-900 transition">
+                    Скрыть
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </AdminShell>
   );
