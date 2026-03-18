@@ -29,6 +29,38 @@ app.use(
 );
 app.use(express.json());
 
+const normalizeTime = (value) => String(value || "").slice(0, 5);
+
+const addMinutesToTime = (startTime, minutesToAdd) => {
+  const normalized = normalizeTime(startTime);
+  const [hoursStr, minutesStr] = normalized.split(":");
+  const hours = Number(hoursStr);
+  const minutes = Number(minutesStr);
+  const duration = Number(minutesToAdd);
+
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59 ||
+    !Number.isFinite(duration) ||
+    duration <= 0
+  ) {
+    return null;
+  }
+
+  const endTotalMinutes = hours * 60 + minutes + duration;
+  if (endTotalMinutes >= 24 * 60) {
+    return null;
+  }
+
+  const endHours = Math.floor(endTotalMinutes / 60);
+  const endMinutes = endTotalMinutes % 60;
+  return `${String(endHours).padStart(2, "0")}:${String(endMinutes).padStart(2, "0")}`;
+};
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
@@ -144,6 +176,23 @@ app.post("/api/appointments", authRequired, async (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
+  const serviceResult = await supabaseAdmin
+    .from("services")
+    .select("duration_min, is_active")
+    .eq("id", serviceId)
+    .maybeSingle();
+  if (serviceResult.error || !serviceResult.data) {
+    return res.status(400).json({ error: "Service not found" });
+  }
+  if (!serviceResult.data.is_active) {
+    return res.status(400).json({ error: "Service is inactive" });
+  }
+
+  const endTime = addMinutesToTime(startTime, serviceResult.data.duration_min);
+  if (!endTime) {
+    return res.status(400).json({ error: "Invalid start time or duration" });
+  }
+
   const profileResult = await supabaseAdmin
     .from("profiles")
     .select("id")
@@ -161,7 +210,7 @@ app.post("/api/appointments", authRequired, async (req, res) => {
     comment: comment || null,
     date,
     start_time: startTime,
-    end_time: startTime,
+    end_time: endTime,
     status: "pending"
   };
 
@@ -319,9 +368,23 @@ app.patch(
       return res.status(400).json({ error: "Date and time are required" });
     }
 
+    const appointmentResult = await supabaseAdmin
+      .from("appointments")
+      .select("service:services(duration_min)")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (appointmentResult.error || !appointmentResult.data?.service?.duration_min) {
+      return res.status(404).json({ error: "Appointment not found" });
+    }
+
+    const endTime = addMinutesToTime(time, appointmentResult.data.service.duration_min);
+    if (!endTime) {
+      return res.status(400).json({ error: "Invalid start time or duration" });
+    }
+
     const { error } = await supabaseAdmin
       .from("appointments")
-      .update({ date, start_time: time, end_time: time })
+      .update({ date, start_time: time, end_time: endTime })
       .eq("id", req.params.id);
 
     if (error) {

@@ -79,6 +79,13 @@ const mapStatusTone = (status) => {
   }
 };
 
+const formatDateRu = (isoDate) => {
+  if (!isoDate || typeof isoDate !== "string") return "";
+  const [year, month, day] = isoDate.split("-");
+  if (!year || !month || !day) return isoDate;
+  return `${day}/${month}/${year}`;
+};
+
 // ---- Вспомогательные компоненты ----
 
 const Badge = ({ children, tone = "default" }) => {
@@ -870,7 +877,7 @@ const StepConfirmation = ({
           <div className="font-semibold text-slate-100">Дата и время</div>
           <div className="text-slate-200">
             {selectedDate && selectedTime
-              ? `${selectedDate} в ${selectedTime}`
+              ? `${formatDateRu(selectedDate)} в ${selectedTime}`
               : "Дата и время не выбраны"}
           </div>
         </div>
@@ -917,7 +924,7 @@ const SummaryPanel = ({ selectedService, selectedDate, selectedTime, clientData 
         <div className="text-slate-400">Дата и время</div>
         <div className="text-slate-100">
           {selectedDate && selectedTime
-            ? `${selectedDate} в ${selectedTime}`
+            ? `${formatDateRu(selectedDate)} в ${selectedTime}`
             : "Вы ещё не выбрали дату и время"}
         </div>
       </div>
@@ -1107,7 +1114,7 @@ export const MyAppointmentsPage = () => {
                 <div className="space-y-1">
                   <div className="font-semibold text-slate-100">{a.serviceName}</div>
                   <div className="text-slate-300">
-                    {a.date} • {a.startTime}
+                    {formatDateRu(a.date)} • {a.startTime}
                   </div>
                   <div className="text-slate-400">
                     {a.clientName} • {a.clientPhone}
@@ -1361,26 +1368,26 @@ const AdminShell = ({ title, description, children }) => {
 };
 
 export const AdminDashboardPage = () => {
-  const [todayAppointments, setTodayAppointments] = useState([]);
+  const [appointmentsForDate, setAppointmentsForDate] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const { pushNotification } = useNotifications();
 
-  const fetchToday = useCallback(async () => {
+  const fetchForDate = useCallback(async () => {
     setLoading(true);
-    const today = new Date().toISOString().slice(0, 10);
     let data = [];
     let err = null;
     try {
       const payload = await api.appointments.adminList();
-      data = (payload.appointments || []).filter((item) => item.date === today);
+      data = (payload.appointments || []).filter((item) => item.date === selectedDate);
     } catch (error) {
       err = error;
     }
 
     if (err) {
       setError(err.message);
-      setTodayAppointments([]);
+      setAppointmentsForDate([]);
     } else {
       const normalized =
         (data || []).map((a) => ({
@@ -1394,15 +1401,15 @@ export const AdminDashboardPage = () => {
           clientName: a.client_name,
           clientPhone: a.client_phone
         })) ?? [];
-      setTodayAppointments(normalized);
+      setAppointmentsForDate(normalized);
       setError(null);
     }
     setLoading(false);
-  }, []);
+  }, [selectedDate]);
 
   useEffect(() => {
-    fetchToday();
-  }, [fetchToday]);
+    fetchForDate();
+  }, [fetchForDate]);
 
   const updateStatus = async (id, newStatus) => {
     try {
@@ -1411,7 +1418,7 @@ export const AdminDashboardPage = () => {
       pushNotification("Не удалось обновить запись: " + error.message, "error");
       return;
     }
-    setTodayAppointments((prev) =>
+    setAppointmentsForDate((prev) =>
       prev.map((a) => (a.id === id ? { ...a, status: newStatus, statusLabel: mapStatusLabel(newStatus) } : a))
     );
     if (newStatus === "confirmed") pushNotification("Запись подтверждена", "info");
@@ -1421,14 +1428,33 @@ export const AdminDashboardPage = () => {
   return (
     <AdminShell
       title="Панель косметолога"
-      description="Центральный экран для управления сегодняшним днём: ближайшие приёмы и быстрые действия."
+      description="Центральный экран для управления записями клиентов по выбранной дате."
     >
       <div className="space-y-4">
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-3 text-xs flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+          <div className="text-slate-300">Фильтр даты записей</div>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              lang="ru-RU"
+              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 outline-none focus:border-emerald-400"
+            />
+            <button
+              type="button"
+              onClick={() => setSelectedDate(new Date().toISOString().slice(0, 10))}
+              className="px-3 py-2 rounded-full border border-slate-700 text-slate-100 hover:bg-slate-900 transition"
+            >
+              Сегодня
+            </button>
+          </div>
+        </div>
         <div className="grid sm:grid-cols-3 gap-3 text-xs">
           <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-3">
-            <div className="text-slate-400 mb-1">Записей сегодня</div>
+            <div className="text-slate-400 mb-1">Записей на выбранную дату</div>
             <div className="text-xl font-semibold text-slate-100">
-              {todayAppointments.length}
+              {appointmentsForDate.length}
             </div>
           </div>
           <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-3">
@@ -1463,23 +1489,23 @@ export const AdminDashboardPage = () => {
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-sm font-semibold">Записи на сегодня</h3>
+          <h3 className="text-sm font-semibold">Записи на {formatDateRu(selectedDate)}</h3>
           <div className="space-y-2 text-xs">
             {loading && (
-              <div className="text-slate-400">Загрузка записей на сегодня...</div>
+              <div className="text-slate-400">Загрузка записей...</div>
             )}
             {error && !loading && (
               <div className="text-rose-400">
-                Не удалось загрузить записи на сегодня: {error}
+                Не удалось загрузить записи: {error}
               </div>
             )}
-            {!loading && !error && todayAppointments.length === 0 ? (
+            {!loading && !error && appointmentsForDate.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/70 p-4 text-slate-400">
-                На сегодня пока нет записей. Свободные слоты можно открыть в разделе
+                На выбранную дату пока нет записей. Свободные слоты можно открыть в разделе
                 &laquo;Расписание&raquo;.
               </div>
             ) : (
-              todayAppointments.map((a) => (
+              appointmentsForDate.map((a) => (
                 <div
                   key={a.id}
                   className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 flex items-center justify-between gap-3"
@@ -1839,7 +1865,7 @@ export const AdminAppointmentsPage = () => {
               <tbody>
                 {filtered.map((a) => (
                   <tr key={a.id} className="border-t border-slate-800/80">
-                    <td className="px-3 py-2">{a.date}</td>
+                    <td className="px-3 py-2">{formatDateRu(a.date)}</td>
                     <td className="px-3 py-2">{a.startTime}</td>
                     <td className="px-3 py-2">{a.clientName}</td>
                     <td className="px-3 py-2">{a.serviceName}</td>
@@ -1912,6 +1938,7 @@ export const AdminAppointmentsPage = () => {
                     value={rescheduleDate}
                     onChange={(e) => setRescheduleDate(e.target.value)}
                     min={now}
+                    lang="ru-RU"
                     className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2 outline-none focus:border-emerald-400"
                   />
                 </div>

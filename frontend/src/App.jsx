@@ -54,7 +54,7 @@ const AppLayout = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { notifications, unreadCount, clearNotifications } = useNotifications();
-  const { user, authLoading, signOut } = useAuth();
+  const { user, role, authLoading, signOut } = useAuth();
 
   const navLinkClass = ({ isActive }) =>
     `px-3 py-2 text-sm font-medium rounded-full transition ${
@@ -91,9 +91,11 @@ const AppLayout = ({ children }) => {
             <NavLink to="/booking" className={navLinkClass}>
               Записаться
             </NavLink>
-            <NavLink to="/my-appointments" className={navLinkClass}>
-              Мои записи
-            </NavLink>
+            {user && (
+              <NavLink to="/my-appointments" className={navLinkClass}>
+                Мои записи
+              </NavLink>
+            )}
             {user ? (
               <>
                 <span className="px-3 py-2 text-sm text-slate-300 truncate max-w-[140px]" title={user.email}>
@@ -115,9 +117,11 @@ const AppLayout = ({ children }) => {
                 Войти
               </NavLink>
             )}
-            <NavLink to="/admin" className={navLinkClass}>
-              Для косметолога
-            </NavLink>
+            {user && (role === "admin" || role === "cosmetologist") && (
+              <NavLink to="/admin" className={navLinkClass}>
+                Для косметолога
+              </NavLink>
+            )}
           </nav>
 
           <div className="flex items-center gap-2">
