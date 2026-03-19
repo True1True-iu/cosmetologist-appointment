@@ -1185,11 +1185,12 @@ export const LoginPage = () => {
     const nextErrors = {};
     if (!email.trim()) {
       nextErrors.email = "Введите email";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      nextErrors.email = "Некорректный формат email";
     }
     if (!password) {
       nextErrors.password = "Введите пароль";
-    }
-    if (mode === "register" && password.length < 6) {
+    } else if (mode === "register" && password.length < 6) {
       nextErrors.password = "Пароль не менее 6 символов";
     }
     setErrors(nextErrors);

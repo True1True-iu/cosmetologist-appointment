@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   HomePage,
@@ -12,7 +12,7 @@ import {
   AdminServicesPage,
   NotFoundPage
 } from "./pages.jsx";
-import { api, getAccessToken, onTokenChange } from "./api.js";
+import { api, getAccessToken, onTokenChange, setAuthInterceptors } from "./api.js";
 
 // Редирект на /login при входе в админку без авторизации
 const AdminGuard = ({ children }) => {
@@ -213,6 +213,35 @@ const ToastContainer = () => {
   );
 };
 
+const AuthInterceptorSetup = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { pushNotification } = useNotifications();
+
+  const navRef = useRef(navigate);
+  const locRef = useRef(location);
+  const notifyRef = useRef(pushNotification);
+  useEffect(() => { navRef.current = navigate; }, [navigate]);
+  useEffect(() => { locRef.current = location; }, [location]);
+  useEffect(() => { notifyRef.current = pushNotification; }, [pushNotification]);
+
+  useEffect(() => {
+    setAuthInterceptors({
+      on401: () => {
+        if (locRef.current.pathname !== "/login") {
+          navRef.current("/login", { replace: true });
+        }
+      },
+      on403: (message) => {
+        notifyRef.current(message || "Нет прав", "error");
+      }
+    });
+    return () => setAuthInterceptors({ on401: null, on403: null });
+  }, []);
+
+  return null;
+};
+
 const App = () => {
   const [notifications, setNotifications] = useState([]);
   const [user, setUser] = useState(null);
@@ -325,6 +354,7 @@ const App = () => {
           </Routes>
         </AppLayout>
         <ToastContainer />
+        <AuthInterceptorSetup />
       </AuthContext.Provider>
     </NotificationsContext.Provider>
   );

@@ -148,3 +148,94 @@ create trigger trg_appointments_set_updated_at
 before update on public.appointments
 for each row
 execute function public.set_updated_at();
+
+-- ============================================================
+-- Row Level Security
+-- ============================================================
+
+alter table public.profiles enable row level security;
+alter table public.appointments enable row level security;
+alter table public.services enable row level security;
+
+-- Helper: returns the profile row for the currently authenticated user.
+create or replace function public.my_profile_id()
+returns uuid
+language sql
+stable
+security definer
+as $$
+  select id from public.profiles where user_id = auth.uid() limit 1;
+$$;
+
+create or replace function public.my_role()
+returns public.user_role
+language sql
+stable
+security definer
+as $$
+  select role from public.profiles where user_id = auth.uid() limit 1;
+$$;
+
+-- ---- profiles ----
+
+drop policy if exists "profiles_select_own" on public.profiles;
+create policy "profiles_select_own" on public.profiles
+  for select to authenticated
+  using (user_id = auth.uid());
+
+drop policy if exists "profiles_update_own" on public.profiles;
+create policy "profiles_update_own" on public.profiles
+  for update to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+drop policy if exists "profiles_insert_own" on public.profiles;
+create policy "profiles_insert_own" on public.profiles
+  for insert to authenticated
+  with check (user_id = auth.uid());
+
+-- ---- services ----
+
+drop policy if exists "services_select_all" on public.services;
+create policy "services_select_all" on public.services
+  for select
+  using (true);
+
+drop policy if exists "services_insert_admin" on public.services;
+create policy "services_insert_admin" on public.services
+  for insert to authenticated
+  with check (public.my_role() in ('cosmetologist', 'admin'));
+
+drop policy if exists "services_update_admin" on public.services;
+create policy "services_update_admin" on public.services
+  for update to authenticated
+  using (public.my_role() in ('cosmetologist', 'admin'))
+  with check (public.my_role() in ('cosmetologist', 'admin'));
+
+-- ---- appointments ----
+
+drop policy if exists "appointments_select" on public.appointments;
+create policy "appointments_select" on public.appointments
+  for select to authenticated
+  using (
+    client_profile_id = public.my_profile_id()
+    or public.my_role() in ('cosmetologist', 'admin')
+  );
+
+drop policy if exists "appointments_insert_own" on public.appointments;
+create policy "appointments_insert_own" on public.appointments
+  for insert to authenticated
+  with check (client_profile_id = public.my_profile_id());
+
+drop policy if exists "appointments_update" on public.appointments;
+create policy "appointments_update" on public.appointments
+  for update to authenticated
+  using (
+    client_profile_id = public.my_profile_id()
+    or public.my_role() in ('cosmetologist', 'admin')
+  );
+
+drop policy if exists "appointments_delete_own" on public.appointments;
+create policy "appointments_delete_own" on public.appointments
+  for delete to authenticated
+  using (client_profile_id = public.my_profile_id());

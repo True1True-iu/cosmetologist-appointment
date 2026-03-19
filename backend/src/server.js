@@ -4,7 +4,18 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "..", ".env"), override: true });
 
 const { supabaseAdmin, supabaseAuth } = require("./supabase");
-const { authRequired, requireAdminRole } = require("./middleware");
+const {
+  authRequired,
+  requireAdminRole,
+  validateBody,
+  validateParam,
+  EMAIL_RE,
+  UUID_RE,
+  DATE_RE,
+  TIME_RE,
+  VALID_STATUSES,
+  VALID_ROLES
+} = require("./middleware");
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -65,11 +76,15 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/auth/register", async (req, res) => {
+app.post(
+  "/api/auth/register",
+  validateBody({
+    email:    { required: true, type: "string", regex: EMAIL_RE, regexMsg: "Некорректный формат email" },
+    password: { required: true, type: "string", minLength: 6 },
+    role:     { required: false, oneOf: VALID_ROLES }
+  }),
+  async (req, res) => {
   const { email, password, fullName, role } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: "Email and password are required" });
-  }
 
   const { data, error } = await supabaseAuth.auth.signUp({
     email,
@@ -102,11 +117,14 @@ app.post("/api/auth/register", async (req, res) => {
   });
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post(
+  "/api/auth/login",
+  validateBody({
+    email:    { required: true, type: "string", regex: EMAIL_RE, regexMsg: "Некорректный формат email" },
+    password: { required: true, type: "string" }
+  }),
+  async (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: "Email and password are required" });
-  }
 
   const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
   if (error) {
@@ -170,11 +188,18 @@ app.get("/api/services", async (_req, res) => {
   res.json({ services: data || [] });
 });
 
-app.post("/api/appointments", authRequired, async (req, res) => {
+app.post(
+  "/api/appointments",
+  authRequired,
+  validateBody({
+    serviceId:   { required: true, type: "string", regex: UUID_RE, regexMsg: "serviceId должен быть валидным UUID" },
+    clientName:  { required: true, type: "string" },
+    clientPhone: { required: true, type: "string" },
+    date:        { required: true, type: "string", regex: DATE_RE, regexMsg: "Дата должна быть в формате YYYY-MM-DD", notInPast: true },
+    startTime:   { required: true, type: "string", regex: TIME_RE, regexMsg: "Время должно быть в формате HH:MM" }
+  }),
+  async (req, res) => {
   const { serviceId, clientName, clientPhone, comment, date, startTime } = req.body || {};
-  if (!serviceId || !clientName || !clientPhone || !date || !startTime) {
-    return res.status(400).json({ error: "Missing required fields" });
-  }
 
   const serviceResult = await supabaseAdmin
     .from("services")
@@ -182,15 +207,15 @@ app.post("/api/appointments", authRequired, async (req, res) => {
     .eq("id", serviceId)
     .maybeSingle();
   if (serviceResult.error || !serviceResult.data) {
-    return res.status(400).json({ error: "Service not found" });
+    return res.status(400).json({ error: "Услуга не найдена" });
   }
   if (!serviceResult.data.is_active) {
-    return res.status(400).json({ error: "Service is inactive" });
+    return res.status(400).json({ error: "Услуга неактивна" });
   }
 
   const endTime = addMinutesToTime(startTime, serviceResult.data.duration_min);
   if (!endTime) {
-    return res.status(400).json({ error: "Invalid start time or duration" });
+    return res.status(400).json({ error: "Некорректное время начала или длительность услуги" });
   }
 
   const profileResult = await supabaseAdmin
@@ -199,7 +224,7 @@ app.post("/api/appointments", authRequired, async (req, res) => {
     .eq("user_id", req.user.id)
     .maybeSingle();
   if (profileResult.error || !profileResult.data?.id) {
-    return res.status(400).json({ error: "Profile not found" });
+    return res.status(400).json({ error: "Профиль не найден" });
   }
 
   const payload = {
@@ -234,7 +259,7 @@ app.get("/api/appointments/my", authRequired, async (req, res) => {
     .eq("user_id", req.user.id)
     .maybeSingle();
   if (profileResult.error || !profileResult.data?.id) {
-    return res.status(400).json({ error: "Profile not found" });
+    return res.status(400).json({ error: "Профиль не найден" });
   }
 
   const { data, error } = await supabaseAdmin
@@ -263,12 +288,14 @@ app.get("/api/appointments/my", authRequired, async (req, res) => {
   res.json({ appointments: data || [] });
 });
 
-app.patch("/api/appointments/:id/status", authRequired, async (req, res) => {
+app.patch(
+  "/api/appointments/:id/status",
+  authRequired,
+  validateParam("id"),
+  validateBody({ status: { required: true, oneOf: VALID_STATUSES } }),
+  async (req, res) => {
   const { status } = req.body || {};
   const appointmentId = req.params.id;
-  if (!status) {
-    return res.status(400).json({ error: "Status is required" });
-  }
 
   const profileResult = await supabaseAdmin
     .from("profiles")
@@ -276,14 +303,25 @@ app.patch("/api/appointments/:id/status", authRequired, async (req, res) => {
     .eq("user_id", req.user.id)
     .maybeSingle();
   if (profileResult.error || !profileResult.data?.id) {
-    return res.status(400).json({ error: "Profile not found" });
+    return res.status(400).json({ error: "Профиль не найден" });
+  }
+
+  const existing = await supabaseAdmin
+    .from("appointments")
+    .select("client_profile_id")
+    .eq("id", appointmentId)
+    .maybeSingle();
+  if (existing.error || !existing.data) {
+    return res.status(404).json({ error: "Запись не найдена" });
+  }
+  if (existing.data.client_profile_id !== profileResult.data.id) {
+    return res.status(403).json({ error: "Нельзя изменить чужую запись" });
   }
 
   const { error } = await supabaseAdmin
     .from("appointments")
     .update({ status })
-    .eq("id", appointmentId)
-    .eq("client_profile_id", profileResult.data.id);
+    .eq("id", appointmentId);
 
   if (error) {
     return res.status(400).json({ error: error.message });
@@ -292,7 +330,7 @@ app.patch("/api/appointments/:id/status", authRequired, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete("/api/appointments/:id", authRequired, async (req, res) => {
+app.delete("/api/appointments/:id", authRequired, validateParam("id"), async (req, res) => {
   const appointmentId = req.params.id;
 
   const profileResult = await supabaseAdmin
@@ -301,14 +339,25 @@ app.delete("/api/appointments/:id", authRequired, async (req, res) => {
     .eq("user_id", req.user.id)
     .maybeSingle();
   if (profileResult.error || !profileResult.data?.id) {
-    return res.status(400).json({ error: "Profile not found" });
+    return res.status(400).json({ error: "Профиль не найден" });
+  }
+
+  const existing = await supabaseAdmin
+    .from("appointments")
+    .select("client_profile_id")
+    .eq("id", appointmentId)
+    .maybeSingle();
+  if (existing.error || !existing.data) {
+    return res.status(404).json({ error: "Запись не найдена" });
+  }
+  if (existing.data.client_profile_id !== profileResult.data.id) {
+    return res.status(403).json({ error: "Нельзя удалить чужую запись" });
   }
 
   const { error } = await supabaseAdmin
     .from("appointments")
     .delete()
-    .eq("id", appointmentId)
-    .eq("client_profile_id", profileResult.data.id);
+    .eq("id", appointmentId);
 
   if (error) {
     return res.status(400).json({ error: error.message });
@@ -343,11 +392,14 @@ app.get("/api/admin/appointments", authRequired, requireAdminRole, async (_req, 
   res.json({ appointments: data || [] });
 });
 
-app.patch("/api/admin/appointments/:id/status", authRequired, requireAdminRole, async (req, res) => {
+app.patch(
+  "/api/admin/appointments/:id/status",
+  authRequired,
+  requireAdminRole,
+  validateParam("id"),
+  validateBody({ status: { required: true, oneOf: VALID_STATUSES } }),
+  async (req, res) => {
   const { status } = req.body || {};
-  if (!status) {
-    return res.status(400).json({ error: "Status is required" });
-  }
   const { error } = await supabaseAdmin
     .from("appointments")
     .update({ status })
@@ -362,11 +414,13 @@ app.patch(
   "/api/admin/appointments/:id/reschedule",
   authRequired,
   requireAdminRole,
+  validateParam("id"),
+  validateBody({
+    date: { required: true, type: "string", regex: DATE_RE, regexMsg: "Дата должна быть в формате YYYY-MM-DD" },
+    time: { required: true, type: "string", regex: TIME_RE, regexMsg: "Время должно быть в формате HH:MM" }
+  }),
   async (req, res) => {
     const { date, time } = req.body || {};
-    if (!date || !time) {
-      return res.status(400).json({ error: "Date and time are required" });
-    }
 
     const appointmentResult = await supabaseAdmin
       .from("appointments")
@@ -374,12 +428,12 @@ app.patch(
       .eq("id", req.params.id)
       .maybeSingle();
     if (appointmentResult.error || !appointmentResult.data?.service?.duration_min) {
-      return res.status(404).json({ error: "Appointment not found" });
+      return res.status(404).json({ error: "Запись не найдена" });
     }
 
     const endTime = addMinutesToTime(time, appointmentResult.data.service.duration_min);
     if (!endTime) {
-      return res.status(400).json({ error: "Invalid start time or duration" });
+      return res.status(400).json({ error: "Некорректное время начала или длительность услуги" });
     }
 
     const { error } = await supabaseAdmin
@@ -395,11 +449,17 @@ app.patch(
   }
 );
 
-app.post("/api/admin/services", authRequired, requireAdminRole, async (req, res) => {
+app.post(
+  "/api/admin/services",
+  authRequired,
+  requireAdminRole,
+  validateBody({
+    name:        { required: true, type: "string" },
+    durationMin: { required: true, type: "integer", min: 1 },
+    price:       { required: true, type: "number", min: 0 }
+  }),
+  async (req, res) => {
   const { name, category, durationMin, price, description, image } = req.body || {};
-  if (!name || !durationMin || !price) {
-    return res.status(400).json({ error: "Name, duration and price are required" });
-  }
 
   const { error } = await supabaseAdmin.from("services").insert([
     {

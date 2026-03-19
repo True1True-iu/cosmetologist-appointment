@@ -1,7 +1,9 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
 const ACCESS_TOKEN_KEY = "cosmobook_access_token";
 
-const listeners = new Set();
+const tokenListeners = new Set();
+let onUnauthorized = null;
+let onForbidden = null;
 
 export const getAccessToken = () => localStorage.getItem(ACCESS_TOKEN_KEY);
 
@@ -11,12 +13,17 @@ export const setAccessToken = (token) => {
   } else {
     localStorage.removeItem(ACCESS_TOKEN_KEY);
   }
-  listeners.forEach((listener) => listener(token || null));
+  tokenListeners.forEach((listener) => listener(token || null));
 };
 
 export const onTokenChange = (listener) => {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  tokenListeners.add(listener);
+  return () => tokenListeners.delete(listener);
+};
+
+export const setAuthInterceptors = ({ on401, on403 }) => {
+  onUnauthorized = on401 || null;
+  onForbidden = on403 || null;
 };
 
 const request = async (path, options = {}) => {
@@ -31,7 +38,15 @@ const request = async (path, options = {}) => {
 
   const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
   const payload = await response.json().catch(() => ({}));
+
   if (!response.ok) {
+    if (response.status === 401 && onUnauthorized) {
+      setAccessToken(null);
+      onUnauthorized();
+    }
+    if (response.status === 403 && onForbidden) {
+      onForbidden(payload?.error || "Нет прав");
+    }
     throw new Error(payload?.error || "Request failed");
   }
   return payload;
