@@ -5,6 +5,11 @@ require("dotenv").config({ path: path.resolve(__dirname, "..", ".env"), override
 
 const { supabaseAdmin, supabaseAuth } = require("./supabase");
 const {
+  getTelegramIntegrationStatus,
+  sendAppointmentNotification,
+  sendTestTelegramMessage
+} = require("./telegram");
+const {
   authRequired,
   requireAdminRole,
   validateBody,
@@ -39,6 +44,20 @@ app.use(
   })
 );
 app.use(express.json());
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  const requestId = `${startedAt}-${Math.random().toString(36).slice(2, 8)}`;
+  // eslint-disable-next-line no-console
+  console.log(`[HTTP] -> id=${requestId} method=${req.method} path=${req.originalUrl} ip=${req.ip}`);
+  res.on("finish", () => {
+    const durationMs = Date.now() - startedAt;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[HTTP] <- id=${requestId} method=${req.method} path=${req.originalUrl} status=${res.statusCode} duration_ms=${durationMs}`
+    );
+  });
+  next();
+});
 
 const normalizeTime = (value) => String(value || "").slice(0, 5);
 
@@ -72,8 +91,89 @@ const addMinutesToTime = (startTime, minutesToAdd) => {
   return `${String(endHours).padStart(2, "0")}:${String(endMinutes).padStart(2, "0")}`;
 };
 
+const mapAppointmentNotificationData = (row) => {
+  if (!row) return null;
+  return {
+    appointmentId: row.id,
+    date: row.date,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    status: row.status,
+    clientName: row.client_name,
+    clientPhone: row.client_phone,
+    serviceName: row.service?.name || null
+  };
+};
+
+const getAppointmentNotificationData = async (appointmentId) => {
+  if (!appointmentId) return null;
+  const result = await supabaseAdmin
+    .from("appointments")
+    .select(
+      `
+      id,
+      date,
+      start_time,
+      end_time,
+      status,
+      client_name,
+      client_phone,
+      service:services ( name )
+    `
+    )
+    .eq("id", appointmentId)
+    .maybeSingle();
+  if (result.error || !result.data) return null;
+  return mapAppointmentNotificationData(result.data);
+};
+
+const notifyAppointmentEventNonBlocking = async (eventType, appointmentId, fallbackData = null) => {
+  try {
+    const payload = (await getAppointmentNotificationData(appointmentId)) || fallbackData;
+    if (!payload) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[TELEGRAM] notification skipped event=${eventType} appointment_id=${appointmentId || "unknown"} reason=no_payload`
+      );
+      return;
+    }
+    await sendAppointmentNotification(eventType, payload);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[TELEGRAM] notification failed event=${eventType} appointment_id=${appointmentId || "unknown"} error=${error.message}`
+    );
+  }
+};
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+app.get("/api/admin/integrations/telegram/status", authRequired, requireAdminRole, (_req, res) => {
+  const status = getTelegramIntegrationStatus();
+  res.json({ telegram: status });
+});
+
+app.post("/api/admin/integrations/telegram/test", authRequired, requireAdminRole, async (req, res) => {
+  const { message } = req.body || {};
+  const status = getTelegramIntegrationStatus();
+  if (!status.enabled) {
+    return res.status(400).json({ error: "Telegram уведомления отключены (TELEGRAM_NOTIFICATIONS_ENABLED=false)" });
+  }
+  if (!status.configured) {
+    return res
+      .status(400)
+      .json({ error: `Telegram не настроен. Отсутствуют ключи: ${status.missing.join(", ")}` });
+  }
+  try {
+    await sendTestTelegramMessage(message);
+    res.json({ ok: true });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`[TELEGRAM] test message failed error=${error.message}`);
+    res.status(502).json({ error: `Telegram сервис недоступен: ${error.message}` });
+  }
 });
 
 app.post(
@@ -249,6 +349,8 @@ app.post(
     return res.status(400).json({ error: error.message });
   }
 
+  void notifyAppointmentEventNonBlocking("appointment_created", data?.id || null);
+
   res.json({ appointment: data });
 });
 
@@ -308,7 +410,19 @@ app.patch(
 
   const existing = await supabaseAdmin
     .from("appointments")
-    .select("client_profile_id")
+    .select(
+      `
+      id,
+      date,
+      start_time,
+      end_time,
+      status,
+      client_name,
+      client_phone,
+      client_profile_id,
+      service:services ( name )
+    `
+    )
     .eq("id", appointmentId)
     .maybeSingle();
   if (existing.error || !existing.data) {
@@ -327,8 +441,77 @@ app.patch(
     return res.status(400).json({ error: error.message });
   }
 
+  void notifyAppointmentEventNonBlocking(
+    "appointment_status_changed",
+    appointmentId,
+    mapAppointmentNotificationData({ ...existing.data, status })
+  );
+
   res.json({ ok: true });
 });
+
+app.patch(
+  "/api/appointments/:id/reschedule",
+  authRequired,
+  validateParam("id"),
+  validateBody({
+    date: {
+      required: true,
+      type: "string",
+      regex: DATE_RE,
+      regexMsg: "Дата должна быть в формате YYYY-MM-DD",
+      notInPast: true
+    },
+    time: { required: true, type: "string", regex: TIME_RE, regexMsg: "Время должно быть в формате HH:MM" }
+  }),
+  async (req, res) => {
+    const appointmentId = req.params.id;
+    const { date, time } = req.body || {};
+
+    const profileResult = await supabaseAdmin
+      .from("profiles")
+      .select("id")
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+    if (profileResult.error || !profileResult.data?.id) {
+      return res.status(400).json({ error: "Профиль не найден" });
+    }
+
+    const existing = await supabaseAdmin
+      .from("appointments")
+      .select("id, client_profile_id, status, service:services(duration_min)")
+      .eq("id", appointmentId)
+      .maybeSingle();
+    if (existing.error || !existing.data) {
+      return res.status(404).json({ error: "Запись не найдена" });
+    }
+    if (existing.data.client_profile_id !== profileResult.data.id) {
+      return res.status(403).json({ error: "Нельзя перенести чужую запись" });
+    }
+    if (existing.data.status === "completed") {
+      return res.status(400).json({ error: "Нельзя перенести завершенную запись" });
+    }
+    if (!existing.data.service?.duration_min) {
+      return res.status(400).json({ error: "Не удалось определить длительность услуги" });
+    }
+
+    const endTime = addMinutesToTime(time, existing.data.service.duration_min);
+    if (!endTime) {
+      return res.status(400).json({ error: "Некорректное время начала или длительность услуги" });
+    }
+
+    const { error } = await supabaseAdmin
+      .from("appointments")
+      .update({ date, start_time: time, end_time: endTime, status: "pending" })
+      .eq("id", appointmentId);
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    void notifyAppointmentEventNonBlocking("appointment_rescheduled", appointmentId);
+    res.json({ ok: true });
+  }
+);
 
 app.delete("/api/appointments/:id", authRequired, validateParam("id"), async (req, res) => {
   const appointmentId = req.params.id;
@@ -344,7 +527,19 @@ app.delete("/api/appointments/:id", authRequired, validateParam("id"), async (re
 
   const existing = await supabaseAdmin
     .from("appointments")
-    .select("client_profile_id")
+    .select(
+      `
+      id,
+      date,
+      start_time,
+      end_time,
+      status,
+      client_name,
+      client_phone,
+      client_profile_id,
+      service:services ( name )
+    `
+    )
     .eq("id", appointmentId)
     .maybeSingle();
   if (existing.error || !existing.data) {
@@ -362,6 +557,12 @@ app.delete("/api/appointments/:id", authRequired, validateParam("id"), async (re
   if (error) {
     return res.status(400).json({ error: error.message });
   }
+
+  void notifyAppointmentEventNonBlocking(
+    "appointment_cancelled",
+    null,
+    mapAppointmentNotificationData({ ...existing.data, status: "cancelled" })
+  );
 
   res.json({ ok: true });
 });
@@ -407,6 +608,8 @@ app.patch(
   if (error) {
     return res.status(400).json({ error: error.message });
   }
+
+  void notifyAppointmentEventNonBlocking("appointment_status_changed", req.params.id);
   res.json({ ok: true });
 });
 
@@ -444,6 +647,8 @@ app.patch(
     if (error) {
       return res.status(400).json({ error: error.message });
     }
+
+    void notifyAppointmentEventNonBlocking("appointment_rescheduled", req.params.id);
 
     res.json({ ok: true });
   }

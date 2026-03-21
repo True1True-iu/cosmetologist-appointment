@@ -569,10 +569,10 @@ export const BookingPage = () => {
                   </button>
                   <button
                     onClick={handleConfirm}
-                    disabled={submitting}
-                    className="text-xs px-3 py-2 rounded-full bg-emerald-500 text-slate-950 font-semibold hover:bg-emerald-400 transition"
+                    disabled={submitting || Boolean(createdAppointment)}
+                    className="text-xs px-3 py-2 rounded-full bg-emerald-500 text-slate-950 font-semibold hover:bg-emerald-400 transition disabled:opacity-60 disabled:pointer-events-none"
                   >
-                    {submitting ? "Создание..." : "Подтвердить запись"}
+                    {createdAppointment ? "Запись создана" : submitting ? "Создание..." : "Подтвердить запись"}
                   </button>
                 </>
               ) : (
@@ -892,15 +892,7 @@ const StepConfirmation = ({
         </div>
       </div>
 
-      {appointment && (
-        <div className="mt-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-100 space-y-1.5">
-          <div className="font-semibold">Запись создана локально</div>
-          <p>
-            В реальном приложении на этом шаге данные отправились бы на сервер, а вы получили
-            бы SMS / e-mail с подтверждением.
-          </p>
-        </div>
-      )}
+      {appointment && null}
     </div>
   );
 };
@@ -945,7 +937,12 @@ export const MyAppointmentsPage = () => {
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [rescheduleAppointment, setRescheduleAppointment] = useState(null);
+  const [rescheduleDate, setRescheduleDate] = useState("");
+  const [rescheduleTime, setRescheduleTime] = useState("");
+  const [rescheduleSaving, setRescheduleSaving] = useState(false);
   const { pushNotification } = useNotifications();
+  const clientRescheduleSlots = ["10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"];
 
   const nowDate = "2026-03-09";
 
@@ -1037,6 +1034,48 @@ export const MyAppointmentsPage = () => {
     }
     setAppointments((prev) => prev.filter((a) => a.id !== id));
     pushNotification("Прошедшая запись удалена из списка", "info");
+  };
+
+  const openReschedule = (appointment) => {
+    setRescheduleAppointment(appointment);
+    setRescheduleDate(appointment.date || "");
+    setRescheduleTime((appointment.startTime || "").slice(0, 5));
+  };
+
+  const saveReschedule = async () => {
+    if (!rescheduleAppointment || !rescheduleDate || !rescheduleTime) {
+      pushNotification("Выберите дату и время", "error");
+      return;
+    }
+    setRescheduleSaving(true);
+    let err = null;
+    try {
+      await api.appointments.myReschedule(rescheduleAppointment.id, rescheduleDate, rescheduleTime);
+    } catch (error) {
+      err = error;
+    }
+    setRescheduleSaving(false);
+
+    if (err) {
+      pushNotification("Не удалось перенести запись: " + err.message, "error");
+      return;
+    }
+
+    setAppointments((prev) =>
+      prev.map((a) =>
+        a.id === rescheduleAppointment.id
+          ? {
+              ...a,
+              date: rescheduleDate,
+              startTime: rescheduleTime,
+              status: "pending",
+              statusLabel: mapStatusLabel("pending")
+            }
+          : a
+      )
+    );
+    setRescheduleAppointment(null);
+    pushNotification("Запись перенесена и отправлена на подтверждение", "info");
   };
 
   return (
@@ -1132,7 +1171,10 @@ export const MyAppointmentsPage = () => {
                           Отменить
                         </button>
                       )}
-                      <button className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-slate-900 transition">
+                      <button
+                        onClick={() => openReschedule(a)}
+                        className="px-3 py-1.5 rounded-full border border-slate-800 text-slate-200 hover:bg-slate-900 transition"
+                      >
                         Перенести
                       </button>
                     </div>
@@ -1152,6 +1194,71 @@ export const MyAppointmentsPage = () => {
             ))}
           </div>
         )
+      )}
+
+      {rescheduleAppointment && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80"
+          onClick={() => !rescheduleSaving && setRescheduleAppointment(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-2xl p-4 w-full max-w-sm shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-slate-100 mb-2">
+              Перенести запись: {rescheduleAppointment.serviceName}
+            </h3>
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-400 mb-1">Новая дата</label>
+                <input
+                  type="date"
+                  value={rescheduleDate}
+                  onChange={(e) => setRescheduleDate(e.target.value)}
+                  min={new Date().toISOString().slice(0, 10)}
+                  lang="ru-RU"
+                  className="w-full bg-slate-800 border border-slate-600 rounded-xl px-3 py-2 outline-none focus:border-emerald-400"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Время</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {clientRescheduleSlots.map((slot) => (
+                    <button
+                      key={slot}
+                      type="button"
+                      onClick={() => setRescheduleTime(slot)}
+                      className={`px-2 py-1 rounded-lg border transition ${
+                        rescheduleTime === slot
+                          ? "bg-emerald-500 border-emerald-500 text-slate-950"
+                          : "border-slate-600 text-slate-300 hover:border-slate-500"
+                      }`}
+                    >
+                      {slot}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                type="button"
+                onClick={saveReschedule}
+                disabled={rescheduleSaving || !rescheduleDate || !rescheduleTime}
+                className="px-3 py-2 rounded-xl bg-emerald-500 text-slate-950 font-medium hover:bg-emerald-400 disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {rescheduleSaving ? "Сохранение…" : "Сохранить"}
+              </button>
+              <button
+                type="button"
+                onClick={() => !rescheduleSaving && setRescheduleAppointment(null)}
+                className="px-3 py-2 rounded-xl border border-slate-600 text-slate-300 hover:bg-slate-800"
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

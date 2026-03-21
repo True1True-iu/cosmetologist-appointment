@@ -93,6 +93,11 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify({ status })
       }),
+    myReschedule: (id, date, time) =>
+      request(`/api/appointments/${id}/reschedule`, {
+        method: "PATCH",
+        body: JSON.stringify({ date, time })
+      }),
     myDelete: (id) => request(`/api/appointments/${id}`, { method: "DELETE" }),
     adminList: () => request("/api/admin/appointments"),
     adminUpdateStatus: (id, status) =>
