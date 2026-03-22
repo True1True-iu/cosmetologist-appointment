@@ -26,6 +26,8 @@ export const setAuthInterceptors = ({ on401, on403 }) => {
   onForbidden = on403 || null;
 };
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 const request = async (path, options = {}) => {
   const token = getAccessToken();
   const headers = { ...(options.headers || {}) };
@@ -36,7 +38,25 @@ const request = async (path, options = {}) => {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      throw new Error("Превышено время ожидания ответа от сервера");
+    }
+    throw err;
+  }
+  clearTimeout(timeoutId);
+
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {

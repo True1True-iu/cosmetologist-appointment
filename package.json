@@ -9,6 +9,10 @@
     "build:frontend": "npm run build --prefix frontend"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "@playwright/test": "^1.58.2",
+    "@supabase/supabase-js": "^2.99.3",
+    "@types/node": "^25.5.0",
+    "concurrently": "^9.1.2",
+    "dotenv": "^17.3.1"
   }
 }

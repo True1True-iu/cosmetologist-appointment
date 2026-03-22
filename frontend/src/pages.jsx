@@ -5,6 +5,9 @@ import { api } from "./api.js";
 
 // ---- Вспомогательные хуки для Supabase ----
 
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 500;
+
 const useServices = () => {
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -12,16 +15,23 @@ const useServices = () => {
 
   useEffect(() => {
     let isMounted = true;
-    const fetchServices = async () => {
-      setLoading(true);
-      let data = [];
-      let err = null;
+
+    const fetchWithRetry = async (attempt = 0) => {
       try {
         const payload = await api.services.list();
-        data = payload.services || [];
-      } catch (error) {
-        err = error;
+        return { data: payload.services || [], err: null };
+      } catch (err) {
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+          return fetchWithRetry(attempt + 1);
+        }
+        return { data: [], err };
       }
+    };
+
+    const fetchServices = async () => {
+      setLoading(true);
+      const { data, err } = await fetchWithRetry();
 
       if (!isMounted) return;
 
@@ -29,7 +39,6 @@ const useServices = () => {
         setError(err.message);
         setServices([]);
       } else {
-        // Приводим поля к формату, который уже использует UI
         const normalized =
           (data || []).map((s) => ({
             id: s.id,

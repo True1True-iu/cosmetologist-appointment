@@ -275,17 +275,28 @@ app.get("/api/auth/me", authRequired, async (req, res) => {
 });
 
 app.get("/api/services", async (_req, res) => {
-  const { data, error } = await supabaseAdmin
-    .from("services")
-    .select("*")
-    .eq("is_active", true)
-    .order("name", { ascending: true });
+  const TIMEOUT_MS = 8000;
 
-  if (error) {
-    return res.status(500).json({ error: error.message });
+  try {
+    const result = await Promise.race([
+      supabaseAdmin
+        .from("services")
+        .select("*")
+        .eq("is_active", true)
+        .order("name", { ascending: true }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Supabase timeout")), TIMEOUT_MS)
+      ),
+    ]);
+
+    if (result.error) {
+      return res.status(500).json({ error: result.error.message });
+    }
+
+    res.json({ services: result.data || [] });
+  } catch (err) {
+    res.status(504).json({ error: err.message || "Сервер не ответил вовремя" });
   }
-
-  res.json({ services: data || [] });
 });
 
 app.post(
