@@ -6,6 +6,9 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
 const VALID_STATUSES = new Set(["pending", "confirmed", "cancelled", "completed"]);
 const VALID_ROLES = new Set(["client", "admin"]);
+const isProduction = process.env.NODE_ENV === "production";
+const getPublicErrorMessage = (error, fallback) =>
+  !isProduction && error?.message ? error.message : fallback;
 
 function validateBody(rules) {
   return (req, res, next) => {
@@ -100,7 +103,7 @@ async function requireAdminRole(req, res, next) {
       .maybeSingle();
 
     if (error) {
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ error: getPublicErrorMessage(error, "Не удалось проверить роль пользователя") });
     }
 
     const role = data?.role || "client";

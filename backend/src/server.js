@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "..", ".env"), override: true });
 
@@ -24,9 +25,30 @@ const {
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
-const clientOrigin = process.env.CLIENT_ORIGIN || "http://localhost:5173";
-const allowedOrigins = new Set([clientOrigin, "http://localhost:5173", "http://localhost:5174"]);
+const isProduction = process.env.NODE_ENV === "production";
+const configuredOrigins = String(process.env.CLIENT_ORIGIN || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = new Set(
+  isProduction
+    ? configuredOrigins
+    : [...configuredOrigins, "http://localhost:5173", "http://localhost:5174"]
+);
 const localhostOriginPattern = /^http:\/\/localhost:\d+$/;
+const getPublicErrorMessage = (error, fallback) =>
+  !isProduction && error?.message ? error.message : fallback;
+const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_RATE_LIMIT_MAX = 10;
+const authRateLimiter = rateLimit({
+  windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
+  max: AUTH_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Слишком много попыток входа или регистрации. Попробуйте снова через 15 минут."
+  }
+});
 
 app.use(
   cors({
@@ -35,7 +57,8 @@ app.use(
         callback(null, true);
         return;
       }
-      if (allowedOrigins.has(origin) || localhostOriginPattern.test(origin)) {
+      const isAllowedLocalhost = !isProduction && localhostOriginPattern.test(origin);
+      if (allowedOrigins.has(origin) || isAllowedLocalhost) {
         callback(null, true);
         return;
       }
@@ -172,12 +195,13 @@ app.post("/api/admin/integrations/telegram/test", authRequired, requireAdminRole
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error(`[TELEGRAM] test message failed error=${error.message}`);
-    res.status(502).json({ error: `Telegram сервис недоступен: ${error.message}` });
+    res.status(502).json({ error: getPublicErrorMessage(error, "Telegram сервис недоступен") });
   }
 });
 
 app.post(
   "/api/auth/register",
+  authRateLimiter,
   validateBody({
     email:    { required: true, type: "string", regex: EMAIL_RE, regexMsg: "Некорректный формат email" },
     password: { required: true, type: "string", minLength: 6 },
@@ -193,7 +217,7 @@ app.post(
   });
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    return res.status(400).json({ error: getPublicErrorMessage(error, "Не удалось зарегистрироваться") });
   }
 
   const user = data?.user || null;
@@ -219,6 +243,7 @@ app.post(
 
 app.post(
   "/api/auth/login",
+  authRateLimiter,
   validateBody({
     email:    { required: true, type: "string", regex: EMAIL_RE, regexMsg: "Некорректный формат email" },
     password: { required: true, type: "string" }
@@ -228,7 +253,7 @@ app.post(
 
   const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
   if (error) {
-    return res.status(401).json({ error: error.message });
+    return res.status(401).json({ error: getPublicErrorMessage(error, "Неверный email или пароль") });
   }
 
   let role = "client";
@@ -264,7 +289,7 @@ app.get("/api/auth/me", authRequired, async (req, res) => {
     .maybeSingle();
 
   if (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: getPublicErrorMessage(error, "Не удалось получить профиль пользователя") });
   }
 
   return res.json({
@@ -290,12 +315,12 @@ app.get("/api/services", async (_req, res) => {
     ]);
 
     if (result.error) {
-      return res.status(500).json({ error: result.error.message });
+      return res.status(500).json({ error: getPublicErrorMessage(result.error, "Не удалось загрузить услуги") });
     }
 
     res.json({ services: result.data || [] });
   } catch (err) {
-    res.status(504).json({ error: err.message || "Сервер не ответил вовремя" });
+    res.status(504).json({ error: getPublicErrorMessage(err, "Сервер не ответил вовремя") });
   }
 });
 
@@ -357,7 +382,7 @@ app.post(
     .single();
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    return res.status(400).json({ error: getPublicErrorMessage(error, "Не удалось создать запись") });
   }
 
   void notifyAppointmentEventNonBlocking("appointment_created", data?.id || null);
@@ -395,7 +420,7 @@ app.get("/api/appointments/my", authRequired, async (req, res) => {
     .order("start_time", { ascending: true });
 
   if (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: getPublicErrorMessage(error, "Не удалось загрузить записи") });
   }
 
   res.json({ appointments: data || [] });
@@ -449,7 +474,7 @@ app.patch(
     .eq("id", appointmentId);
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    return res.status(400).json({ error: getPublicErrorMessage(error, "Не удалось обновить статус записи") });
   }
 
   void notifyAppointmentEventNonBlocking(
@@ -516,7 +541,7 @@ app.patch(
       .update({ date, start_time: time, end_time: endTime, status: "pending" })
       .eq("id", appointmentId);
     if (error) {
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ error: getPublicErrorMessage(error, "Не удалось перенести запись") });
     }
 
     void notifyAppointmentEventNonBlocking("appointment_rescheduled", appointmentId);
@@ -566,7 +591,7 @@ app.delete("/api/appointments/:id", authRequired, validateParam("id"), async (re
     .eq("id", appointmentId);
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    return res.status(400).json({ error: getPublicErrorMessage(error, "Не удалось удалить запись") });
   }
 
   void notifyAppointmentEventNonBlocking(
@@ -598,7 +623,7 @@ app.get("/api/admin/appointments", authRequired, requireAdminRole, async (_req, 
     .order("start_time", { ascending: true });
 
   if (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: getPublicErrorMessage(error, "Не удалось загрузить записи") });
   }
 
   res.json({ appointments: data || [] });
@@ -617,7 +642,7 @@ app.patch(
     .update({ status })
     .eq("id", req.params.id);
   if (error) {
-    return res.status(400).json({ error: error.message });
+    return res.status(400).json({ error: getPublicErrorMessage(error, "Не удалось обновить статус записи") });
   }
 
   void notifyAppointmentEventNonBlocking("appointment_status_changed", req.params.id);
@@ -656,7 +681,7 @@ app.patch(
       .eq("id", req.params.id);
 
     if (error) {
-      return res.status(400).json({ error: error.message });
+      return res.status(400).json({ error: getPublicErrorMessage(error, "Не удалось перенести запись") });
     }
 
     void notifyAppointmentEventNonBlocking("appointment_rescheduled", req.params.id);
@@ -690,7 +715,7 @@ app.post(
   ]);
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    return res.status(400).json({ error: getPublicErrorMessage(error, "Не удалось создать услугу") });
   }
 
   res.json({ ok: true });
