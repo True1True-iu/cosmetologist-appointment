@@ -40,15 +40,17 @@ const getPublicErrorMessage = (error, fallback) =>
   !isProduction && error?.message ? error.message : fallback;
 const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_RATE_LIMIT_MAX = 10;
-const authRateLimiter = rateLimit({
-  windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
-  max: AUTH_RATE_LIMIT_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    error: "Слишком много попыток входа или регистрации. Попробуйте снова через 15 минут."
-  }
-});
+const authRateLimiter = !isProduction
+  ? (_req, _res, next) => next()
+  : rateLimit({
+    windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
+    max: AUTH_RATE_LIMIT_MAX,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      error: "Слишком много попыток входа или регистрации. Попробуйте снова через 15 минут."
+    }
+  });
 
 app.use(
   cors({
