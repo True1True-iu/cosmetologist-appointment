@@ -177,9 +177,6 @@ const AppLayout = ({ children }) => {
             <a href="#" className="hover:text-slate-200 transition">
               Политика конфиденциальности
             </a>
-            <a href="#" className="hover:text-slate-200 transition">
-              Instagram
-            </a>
           </div>
         </div>
       </footer>
@@ -238,6 +235,22 @@ const AuthInterceptorSetup = () => {
     });
     return () => setAuthInterceptors({ on401: null, on403: null });
   }, []);
+
+  return null;
+};
+
+const METRIKA_ID = 108270425;
+
+const YandexMetrikaHit = () => {
+  const location = useLocation();
+
+  useEffect(() => {
+    if (typeof window.ym === "function") {
+      window.ym(METRIKA_ID, "hit", window.location.href, {
+        title: document.title
+      });
+    }
+  }, [location]);
 
   return null;
 };
@@ -355,6 +368,7 @@ const App = () => {
         </AppLayout>
         <ToastContainer />
         <AuthInterceptorSetup />
+        <YandexMetrikaHit />
       </AuthContext.Provider>
     </NotificationsContext.Provider>
   );
