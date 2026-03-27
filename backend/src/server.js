@@ -171,6 +171,10 @@ const notifyAppointmentEventNonBlocking = async (eventType, appointmentId, fallb
   }
 };
 
+app.get("/", (_req, res) => {
+  res.status(200).json({ ok: true, service: "cosmobook-backend" });
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
@@ -723,7 +727,7 @@ app.post(
   res.json({ ok: true });
 });
 
-app.listen(port, () => {
+app.listen(port, "0.0.0.0", () => {
   // eslint-disable-next-line no-console
-  console.log(`Backend API is running on http://localhost:${port}`);
+  console.log(`Backend API is running on http://0.0.0.0:${port}`);
 });
